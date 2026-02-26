@@ -87,12 +87,18 @@ public sealed unsafe class SharedJournal : IDisposable
             path, FileMode.Open, FileAccess.ReadWrite,
             FileShare.ReadWrite, fileOptions);
 
+        // Open a FileStream with ReadWrite sharing for the MMF — CreateFromFile(string, ...)
+        // opens the file internally without FileShare.ReadWrite, which conflicts with
+        // our already-open data handle on Windows.
+        FileStream? metaStream = null;
         MemoryMappedFile? metaMap = null;
         MemoryMappedViewAccessor? metaView = null;
         try
         {
+            metaStream = new FileStream(
+                path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
             metaMap = MemoryMappedFile.CreateFromFile(
-                path, FileMode.Open, null, 0, MemoryMappedFileAccess.ReadWrite);
+                metaStream, null, 0, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: false);
             metaView = metaMap.CreateViewAccessor(
                 0, JournalFormat.MetadataFileSize, MemoryMappedFileAccess.ReadWrite);
 
@@ -108,6 +114,9 @@ public sealed unsafe class SharedJournal : IDisposable
         {
             metaView?.Dispose();
             metaMap?.Dispose();
+            // metaStream is disposed by metaMap (leaveOpen: false), only dispose if metaMap wasn't created
+            if (metaMap is null)
+                metaStream?.Dispose();
             fileHandle.Dispose();
             throw;
         }
