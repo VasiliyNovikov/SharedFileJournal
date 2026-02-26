@@ -30,7 +30,7 @@ jobs:
         run: dotnet build
 
       - name: Test
-        run: sudo -E --preserve-env=PATH dotnet test --no-build --logger trx --results-directory "TestResults-${{ matrix.os }}"
+        run: dotnet test --no-build --logger trx --results-directory "TestResults-${{ matrix.os }}"
 
       - name: Upload Test Results
         uses: actions/upload-artifact@v4
