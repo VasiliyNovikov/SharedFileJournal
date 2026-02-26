@@ -257,10 +257,10 @@ public sealed unsafe class SharedJournal : IDisposable
     {
         if (Interlocked.CompareExchange(ref meta->Magic, JournalFormat.MetadataMagic, 0) == 0)
         {
-            // Won the initialization race
-            meta->Version = JournalFormat.MetadataVersion;
+            // Won the initialization race — write NextWriteOffset before Version
+            // so followers spinning on Version cannot proceed with an uninitialized tail
             Volatile.Write(ref meta->NextWriteOffset, (long)JournalFormat.DataStartOffset);
-            Thread.MemoryBarrier();
+            Volatile.Write(ref meta->Version, JournalFormat.MetadataVersion);
         }
         else
         {

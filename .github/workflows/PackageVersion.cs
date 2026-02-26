@@ -6,7 +6,7 @@ using System.Xml;
 using System.Net;
 using NuGet.Versioning;
 
-const string projectName = "LibNlCore";
+const string projectName = "SharedFileJournal";
 
 string githubRunId = Environment.GetEnvironmentVariable("GITHUB_RUN_ID")!;
 string githubRefName = Environment.GetEnvironmentVariable("GITHUB_REF_NAME")!;
