@@ -45,7 +45,7 @@ foreach (var record in journal.ReadAll())
     Console.WriteLine($"offset={record.Offset} len={record.Payload.Length}");
 
 // Recover after a crash (scans and resets tail to last valid record)
-var result = journal.Recover(truncate: true);
+var result = journal.Recover();
 ```
 
 ## API
@@ -57,7 +57,7 @@ var result = journal.Recover(truncate: true);
 | `FlushMode` | `None` (default) or `WriteThrough` |
 | `JournalAppendResult` | Offset and total length of appended record |
 | `JournalRecord` | Offset and payload of a read record |
-| `JournalRecoveryResult` | Valid end offset, record count, and whether the file was truncated |
+| `JournalRecoveryResult` | Valid end offset and record count |
 
 ## Durability
 

@@ -37,7 +37,6 @@ public class RecoveryTests
 
         Assert.AreEqual((long)JournalFormat.DataStartOffset, result.ValidEndOffset);
         Assert.AreEqual(0, result.ValidRecordCount);
-        Assert.IsFalse(result.WasTruncated);
     }
 
     [TestMethod]
@@ -51,7 +50,6 @@ public class RecoveryTests
         var result = journal.Recover();
 
         Assert.AreEqual(3, result.ValidRecordCount);
-        Assert.IsFalse(result.WasTruncated);
     }
 
     [TestMethod]
@@ -85,37 +83,6 @@ public class RecoveryTests
             var records = journal.ReadAll().ToList();
             Assert.AreEqual(3, records.Count);
         }
-    }
-
-    [TestMethod]
-    public void Recover_WithTruncate_PhysicallyTruncatesFile()
-    {
-        long validEnd;
-        using (var journal = SharedJournal.Open(JournalPath))
-        {
-            var r = journal.Append("valid"u8);
-            validEnd = r.Offset + r.TotalRecordLength;
-        }
-
-        // Append garbage
-        using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
-        {
-            fs.Seek(0, SeekOrigin.End);
-            fs.Write(new byte[100]);
-        }
-
-        using (var journal = SharedJournal.Open(JournalPath))
-        {
-            var result = journal.Recover(truncate: true);
-
-            Assert.AreEqual(1, result.ValidRecordCount);
-            Assert.IsTrue(result.WasTruncated);
-            Assert.AreEqual(validEnd, result.ValidEndOffset);
-        }
-
-        // Verify file was physically truncated
-        var fileInfo = new FileInfo(JournalPath);
-        Assert.AreEqual(validEnd, fileInfo.Length);
     }
 
     [TestMethod]

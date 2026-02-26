@@ -181,11 +181,8 @@ public sealed unsafe class SharedJournal : IDisposable
     /// This method must not be called while other writers are concurrently appending.
     /// Doing so may cause newly appended records to be orphaned.
     /// </remarks>
-    /// <param name="truncate">
-    /// If <c>true</c>, physically truncates the data file to the valid end offset.
-    /// </param>
     [SkipLocalsInit]
-    public JournalRecoveryResult Recover(bool truncate = false)
+    public JournalRecoveryResult Recover()
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
 
@@ -225,16 +222,7 @@ public sealed unsafe class SharedJournal : IDisposable
         if (offset != currentTail)
             CompareAndSetNextWriteOffset(currentTail, offset);
 
-        var wasTruncated = false;
-        if (truncate && offset < fileLength)
-        {
-            using var fs = new FileStream(
-                _filePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-            fs.SetLength(offset);
-            wasTruncated = true;
-        }
-
-        return new JournalRecoveryResult(offset, validCount, wasTruncated);
+        return new JournalRecoveryResult(offset, validCount);
     }
 
     /// <inheritdoc/>

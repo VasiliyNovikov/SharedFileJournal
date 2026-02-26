@@ -62,11 +62,10 @@ void Read()
 void RecoverJournal()
 {
     using var journal = SharedJournal.Open(basePath);
-    var result = journal.Recover(truncate: true);
+    var result = journal.Recover();
     Console.WriteLine($"Recovery complete:");
     Console.WriteLine($"  Valid records: {result.ValidRecordCount}");
     Console.WriteLine($"  Valid end offset: {result.ValidEndOffset}");
-    Console.WriteLine($"  Truncated: {result.WasTruncated}");
 }
 
 void Stress()
@@ -130,6 +129,6 @@ void Stress()
 
     // Recovery check
     var recovery = journal.Recover();
-    Console.WriteLine($"Recovery: {recovery.ValidRecordCount} valid records, truncated: {recovery.WasTruncated}");
+    Console.WriteLine($"Recovery: {recovery.ValidRecordCount} valid records");
     Console.WriteLine("All checks passed!");
 }
