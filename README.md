@@ -6,7 +6,7 @@ A cross-platform .NET library for **high-speed concurrent multi-process append**
 
 - **Multi-process safe**: Multiple processes can append concurrently via atomic offset reservation
 - **No file locks on writes**: Uses `Interlocked.Add` on a memory-mapped metadata region for lock-free space reservation, then `RandomAccess.Write` at the reserved offset
-- **Recoverable format**: Self-validating records (header + payload + trailer with FNV-1a checksum) let readers detect and recover from partial/crashed writes
+- **Recoverable format**: Self-validating records (header with FNV-1a checksum, aligned to 16-byte boundaries) let readers detect and recover from partial/crashed writes
 - **Cross-platform**: Works on Windows and Linux with .NET 10+
 
 ## Architecture
@@ -20,13 +20,16 @@ The first 4096 bytes are memory-mapped for atomic coordination; records start at
 
 The metadata file is mapped via `MemoryMappedFile.CreateFromFile`. A raw pointer to the `NextWriteOffset` field (at cache-line-aligned offset 64 within the file header) is used with `Interlocked.Add` for atomic fetch-add semantics. This works across processes because the mapping is backed by the same physical pages, and `Interlocked` compiles to hardware atomics (`lock xadd` on x86-64) that are coherent across all sharers.
 
-### Record format (48 bytes overhead)
+### Record format (16 bytes overhead)
 
 ```
-Header (32 bytes): Magic "SFJR" | Version | HeaderLen | PayloadLen | TotalLen | Offset | Checksum
+Header (16 bytes): Magic "SFJR" (4B) | PayloadLength (4B) | Checksum (8B)
 Payload:           Variable-length byte data
-Trailer (16 bytes): Magic "SFJT" | TotalLen | Offset
+Padding:           0–15 bytes to align total record size to 16-byte boundary
 ```
+
+Records are aligned to 16-byte boundaries so that recovery scanning can step by alignment
+instead of byte-by-byte, eliminating chunk-overlap logic.
 
 ## Quick Start
 

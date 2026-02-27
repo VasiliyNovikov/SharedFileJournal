@@ -46,7 +46,7 @@ public class SharedJournalTests
         var result = journal.Append(payload);
 
         Assert.AreEqual((long)JournalFormat.DataStartOffset, result.Offset);
-        Assert.AreEqual(JournalFormat.MinRecordSize + payload.Length, result.TotalRecordLength);
+        Assert.AreEqual(JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + payload.Length), result.TotalRecordLength);
 
         var records = journal.ReadAll().ToList();
         Assert.AreEqual(1, records.Count);
@@ -169,7 +169,7 @@ public class SharedJournalTests
         }
 
         // Corrupt the second record's header by zeroing it
-        var firstRecordSize = JournalFormat.RecordHeaderSize + 5; // "first" = 5 bytes
+        var firstRecordSize = JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + 5); // "first" = 5 bytes
         using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
         {
             fs.Seek(JournalFormat.DataStartOffset + firstRecordSize, SeekOrigin.Begin);
@@ -197,7 +197,7 @@ public class SharedJournalTests
 
         // Corrupt the payload of the second record
         var corruptOffset = JournalFormat.DataStartOffset
-            + JournalFormat.RecordHeaderSize + 5  // past first record
+            + JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + 5)  // past first record
             + JournalFormat.RecordHeaderSize + 2; // into second record's payload
         using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
         {

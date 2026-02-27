@@ -22,5 +22,5 @@ internal struct RecordHeader
     public readonly bool IsValid() =>
         Magic == JournalFormat.RecordHeaderMagic &&
         PayloadLength >= 0 &&
-        PayloadLength <= int.MaxValue - JournalFormat.MinRecordSize;
+        PayloadLength <= int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment;
 }

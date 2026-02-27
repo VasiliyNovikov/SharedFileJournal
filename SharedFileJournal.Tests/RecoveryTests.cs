@@ -96,7 +96,7 @@ public class RecoveryTests
         }
 
         // Corrupt the payload of the second record
-        var firstRecordSize = JournalFormat.MinRecordSize + 4; // "good" = 4 bytes
+        var firstRecordSize = JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + 4); // "good" = 4 bytes
         var corruptionOffset = JournalFormat.DataStartOffset + firstRecordSize + JournalFormat.RecordHeaderSize + 2;
         using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
         {

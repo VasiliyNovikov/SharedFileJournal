@@ -143,19 +143,20 @@ public sealed unsafe class SharedJournal : IDisposable
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
 
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
-            payload.Length, int.MaxValue - JournalFormat.MinRecordSize, nameof(payload));
+            payload.Length, int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment, nameof(payload));
 
-        var totalLength = JournalFormat.RecordHeaderSize + payload.Length;
-        var offset = ReserveSpace(totalLength);
+        var dataLength = JournalFormat.RecordHeaderSize + payload.Length;
+        var alignedLength = JournalFormat.AlignRecordSize(dataLength);
+        var offset = ReserveSpace(alignedLength);
 
         byte[]? rented = null;
-        var span = totalLength <= 2048
-            ? stackalloc byte[totalLength]
-            : (rented = ArrayPool<byte>.Shared.Rent(totalLength));
+        var span = dataLength <= 2048
+            ? stackalloc byte[dataLength]
+            : (rented = ArrayPool<byte>.Shared.Rent(dataLength));
         try
         {
             JournalFormat.WriteRecord(span, payload);
-            RandomAccess.Write(_fileHandle, span[..totalLength], offset);
+            RandomAccess.Write(_fileHandle, span[..dataLength], offset);
         }
         finally
         {
@@ -166,7 +167,7 @@ public sealed unsafe class SharedJournal : IDisposable
         if (flushMode == FlushMode.WriteThrough)
             FlushDataFile();
 
-        return new JournalAppendResult(offset, totalLength);
+        return new JournalAppendResult(offset, alignedLength);
     }
 
     /// <summary>
@@ -209,7 +210,7 @@ public sealed unsafe class SharedJournal : IDisposable
             if (!header.IsValid())
                 break;
 
-            var totalRecordLength = JournalFormat.RecordHeaderSize + header.PayloadLength;
+            var totalRecordLength = JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + header.PayloadLength);
             if (offset + totalRecordLength > scanEnd)
                 break;
 
@@ -332,7 +333,7 @@ public sealed unsafe class SharedJournal : IDisposable
                 continue;
             }
 
-            var totalRecordLength = JournalFormat.RecordHeaderSize + header.PayloadLength;
+            var totalRecordLength = JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + header.PayloadLength);
             if (offset + totalRecordLength > tail)
                 yield break;
 
@@ -357,14 +358,14 @@ public sealed unsafe class SharedJournal : IDisposable
 
     /// <summary>
     /// Scans forward from <paramref name="startOffset"/> looking for the next
-    /// <see cref="JournalFormat.RecordHeaderMagic"/> byte pattern.
+    /// <see cref="JournalFormat.RecordHeaderMagic"/> byte pattern at an aligned offset.
     /// Returns <paramref name="endOffset"/> if none found.
     /// </summary>
     [SkipLocalsInit]
     private long ScanForNextMagic(long startOffset, long endOffset)
     {
         Span<byte> chunk = stackalloc byte[4096];
-        var offset = startOffset;
+        var offset = JournalFormat.AlignUp(startOffset);
 
         while (offset + JournalFormat.MinRecordSize <= endOffset)
         {
@@ -373,14 +374,13 @@ public sealed unsafe class SharedJournal : IDisposable
             if (bytesRead < sizeof(uint))
                 break;
 
-            for (var i = 0; i <= bytesRead - sizeof(uint); i++)
+            for (var i = 0; i <= bytesRead - sizeof(uint); i += JournalFormat.RecordAlignment)
             {
                 if (MemoryMarshal.Read<uint>(chunk[i..]) == JournalFormat.RecordHeaderMagic)
                     return offset + i;
             }
 
-            // Overlap by 3 bytes so magic spanning chunk boundaries isn't missed
-            offset += bytesRead - (sizeof(uint) - 1);
+            offset += bytesRead;
         }
 
         return endOffset;
