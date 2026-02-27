@@ -6,7 +6,6 @@ using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 using SharedFileJournal.Internal;
-
 namespace SharedFileJournal.Tests;
 
 [TestClass]
@@ -213,5 +212,28 @@ public class SharedJournalTests
             Assert.AreEqual("good1", System.Text.Encoding.UTF8.GetString(records[0].Payload.Span));
             Assert.AreEqual("good2", System.Text.Encoding.UTF8.GetString(records[1].Payload.Span));
         }
+    }
+
+    [TestMethod]
+    [Timeout(10_000)]
+    public void Open_RecoversFromPartialInitialization()
+    {
+        // Simulate a crash that wrote Magic but never wrote Version.
+        // Create a properly-sized journal file and write only the Magic header.
+        using (var fs = new FileStream(
+            JournalPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.ReadWrite))
+        {
+            fs.SetLength(JournalFormat.MetadataFileSize);
+            Span<byte> magic = stackalloc byte[sizeof(ulong)];
+            BitConverter.TryWriteBytes(magic, JournalFormat.MetadataMagic);
+            fs.Write(magic);
+        }
+
+        // Open should detect partial init after spin timeout and complete it
+        using var journal = SharedJournal.Open(JournalPath);
+        journal.Append("after recovery"u8);
+        var records = journal.ReadAll().ToList();
+        Assert.AreEqual(1, records.Count);
+        Assert.AreEqual("after recovery", Encoding.UTF8.GetString(records[0].Payload.Span));
     }
 }

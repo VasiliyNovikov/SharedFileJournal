@@ -137,4 +137,35 @@ public class RecoveryTests
             Assert.AreEqual((long)JournalFormat.DataStartOffset, result.ValidEndOffset);
         }
     }
+
+    [TestMethod]
+    public void Recover_UpdatesTail_NextAppendStartsAtValidEnd()
+    {
+        long validEnd;
+        using (var journal = SharedJournal.Open(JournalPath))
+        {
+            journal.Append("good"u8);
+            var r = journal.Append("also good"u8);
+            validEnd = r.Offset + r.TotalRecordLength;
+            journal.Append("corrupt me"u8);
+        }
+
+        // Zero out the third record header to make it invalid
+        using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+        {
+            fs.Seek(validEnd, SeekOrigin.Begin);
+            fs.Write(new byte[JournalFormat.RecordHeaderSize]);
+        }
+
+        using (var journal = SharedJournal.Open(JournalPath))
+        {
+            var result = journal.Recover();
+            Assert.AreEqual(validEnd, result.ValidEndOffset);
+
+            // Verify the tail pointer was actually updated (CAS succeeded)
+            var appendResult = journal.Append("new record"u8);
+            Assert.AreEqual(validEnd, appendResult.Offset,
+                "After recovery, next append should start at ValidEndOffset.");
+        }
+    }
 }

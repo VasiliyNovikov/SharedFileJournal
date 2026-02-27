@@ -38,6 +38,12 @@ namespace SharedFileJournal;
 /// <see cref="MemoryMappedFile.CreateFromFile(string, FileMode)"/> (no named shared memory)
 /// and <see cref="RandomAccess"/> for portable I/O.
 /// </para>
+/// <para>
+/// <b>Disposal contract:</b> Callers must ensure that no concurrent operations
+/// (<see cref="Append"/>, <see cref="ReadAll"/>, <see cref="Recover"/>) are in flight
+/// when <see cref="Dispose"/> is called. This is a deliberate design choice to avoid
+/// adding synchronization overhead to the lock-free write path.
+/// </para>
 /// </remarks>
 public sealed unsafe class SharedJournal : IDisposable
 {
@@ -220,12 +226,25 @@ public sealed unsafe class SharedJournal : IDisposable
         }
 
         if (offset != currentTail)
-            CompareAndSetNextWriteOffset(currentTail, offset);
+        {
+            var previous = CompareAndSetNextWriteOffset(currentTail, offset);
+            if (previous != currentTail)
+                throw new InvalidOperationException(
+                    $"Recovery failed: concurrent modification detected. Expected tail {currentTail}, actual {previous}.");
+        }
 
         return new JournalRecoveryResult(offset, validCount);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Releases all resources used by this journal instance.
+    /// </summary>
+    /// <remarks>
+    /// Callers must ensure that no concurrent <see cref="Append"/>, <see cref="ReadAll"/>,
+    /// or <see cref="Recover"/> operations are in flight when this method is called.
+    /// Accessing the journal from another thread during or after disposal leads to
+    /// undefined behavior (use-after-free of memory-mapped pointers).
+    /// </remarks>
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -268,7 +287,17 @@ public sealed unsafe class SharedJournal : IDisposable
             {
                 spin.SpinOnce();
                 if (Environment.TickCount64 > deadline)
-                    throw new TimeoutException("Timed out waiting for journal metadata initialization.");
+                {
+                    // The initializer may have crashed after setting Magic but before
+                    // writing Version. If Magic is valid, complete the initialization.
+                    if (Volatile.Read(ref meta->Magic) != JournalFormat.MetadataMagic)
+                        throw new InvalidOperationException("Invalid journal metadata file: wrong magic.");
+
+                    Interlocked.CompareExchange(
+                        ref meta->NextWriteOffset, (long)JournalFormat.DataStartOffset, 0);
+                    Volatile.Write(ref meta->Version, JournalFormat.MetadataVersion);
+                    return;
+                }
             }
 
             if (Volatile.Read(ref meta->Magic) != JournalFormat.MetadataMagic)
@@ -282,7 +311,7 @@ public sealed unsafe class SharedJournal : IDisposable
     private long GetNextWriteOffset() =>
         Volatile.Read(ref _meta->NextWriteOffset);
 
-    private void CompareAndSetNextWriteOffset(long expected, long value) =>
+    private long CompareAndSetNextWriteOffset(long expected, long value) =>
         Interlocked.CompareExchange(ref _meta->NextWriteOffset, value, expected);
 
     private IEnumerable<JournalRecord> ReadRecords()
