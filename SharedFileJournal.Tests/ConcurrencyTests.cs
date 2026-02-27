@@ -134,7 +134,7 @@ public class ConcurrencyTests
     }
 
     [TestMethod]
-    public void ConcurrentAppend_Recovery_AllValidAfterRecovery()
+    public void ConcurrentAppend_Compaction_AllValidAfterRecovery()
     {
         const int threadCount = 4;
         const int recordsPerThread = 200;
@@ -154,7 +154,7 @@ public class ConcurrencyTests
 
         Task.WaitAll(tasks);
 
-        var result = journal.Recover();
+        var result = journal.Compact();
         Assert.AreEqual(threadCount * recordsPerThread, result.ValidRecordCount);
     }
 

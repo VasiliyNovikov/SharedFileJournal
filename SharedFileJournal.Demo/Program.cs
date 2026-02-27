@@ -22,14 +22,14 @@ switch (command)
     case "read":
         Read();
         break;
-    case "recover":
-        RecoverJournal();
+    case "compact":
+        CompactJournal();
         break;
     case "stress":
         Stress();
         break;
     default:
-        Console.WriteLine("Usage: SharedFileJournal.Demo <init|write|read|recover|stress> [basePath] [message]");
+        Console.WriteLine("Usage: SharedFileJournal.Demo <init|write|read|compact|stress> [basePath] [message]");
         break;
 }
 
@@ -59,11 +59,11 @@ void Read()
     Console.WriteLine($"Total records: {count}");
 }
 
-void RecoverJournal()
+void CompactJournal()
 {
     using var journal = new SharedJournal(basePath);
-    var result = journal.Recover();
-    Console.WriteLine($"Recovery complete:");
+    var result = journal.Compact();
+    Console.WriteLine($"Compaction complete:");
     Console.WriteLine($"  Valid records: {result.ValidRecordCount}");
     Console.WriteLine($"  Valid end offset: {result.ValidEndOffset}");
 }
@@ -127,8 +127,8 @@ void Stress()
         }
     }
 
-    // Recovery check
-    var recovery = journal.Recover();
-    Console.WriteLine($"Recovery: {recovery.ValidRecordCount} valid records");
+    // Compaction check
+    var recovery = journal.Compact();
+    Console.WriteLine($"Compaction: {recovery.ValidRecordCount} valid records");
     Console.WriteLine("All checks passed!");
 }

@@ -40,7 +40,7 @@ namespace SharedFileJournal;
 /// </para>
 /// <para>
 /// <b>Disposal contract:</b> Callers must ensure that no concurrent operations
-/// (<see cref="Append"/>, <see cref="ReadAll"/>, <see cref="Recover"/>) are in flight
+/// (<see cref="Append"/>, <see cref="ReadAll"/>, <see cref="Compact"/>) are in flight
 /// when <see cref="Dispose"/> is called. This is a deliberate design choice to avoid
 /// adding synchronization overhead to the lock-free write path.
 /// </para>
@@ -142,15 +142,15 @@ public sealed unsafe class SharedJournal : IDisposable
     }
 
     /// <summary>
-    /// Scans the journal from the beginning, validates each record, and updates the
-    /// metadata tail to point past the last valid record.
+    /// Scans the journal from the beginning, validates each record, and resets the
+    /// write offset to reclaim space reserved by incomplete or corrupted writes.
     /// </summary>
     /// <remarks>
     /// This method must not be called while other writers are concurrently appending.
     /// Doing so may cause newly appended records to be orphaned.
     /// </remarks>
     [SkipLocalsInit]
-    public JournalRecoveryResult Recover()
+    public JournalCompactionResult Compact()
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
 
@@ -192,10 +192,10 @@ public sealed unsafe class SharedJournal : IDisposable
             var previous = CompareAndSetNextWriteOffset(currentTail, offset);
             if (previous != currentTail)
                 throw new InvalidOperationException(
-                    $"Recovery failed: concurrent modification detected. Expected tail {currentTail}, actual {previous}.");
+                    $"Compaction failed: concurrent modification detected. Expected tail {currentTail}, actual {previous}.");
         }
 
-        return new JournalRecoveryResult(offset, validCount);
+        return new JournalCompactionResult(offset, validCount);
     }
 
     /// <summary>
@@ -203,7 +203,7 @@ public sealed unsafe class SharedJournal : IDisposable
     /// </summary>
     /// <remarks>
     /// Callers must ensure that no concurrent <see cref="Append"/>, <see cref="ReadAll"/>,
-    /// or <see cref="Recover"/> operations are in flight when this method is called.
+    /// or <see cref="Compact"/> operations are in flight when this method is called.
     /// Accessing the journal from another thread during or after disposal leads to
     /// undefined behavior (use-after-free of memory-mapped pointers).
     /// </remarks>

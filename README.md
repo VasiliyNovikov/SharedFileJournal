@@ -47,20 +47,20 @@ journal.Append(myPayloadBytes);
 foreach (var record in journal.ReadAll())
     Console.WriteLine($"offset={record.Offset} len={record.Payload.Length}");
 
-// Recover after a crash (scans and resets tail to last valid record)
-var result = journal.Recover();
+// Compact after a crash (resets tail to last valid record, reclaims wasted space)
+var result = journal.Compact();
 ```
 
 ## API
 
 | Type | Description |
 |------|-------------|
-| `SharedJournal` | Main entry point — `Append`, `ReadAll`, `Recover`, `Dispose` |
+| `SharedJournal` | Main entry point — `Append`, `ReadAll`, `Compact`, `Dispose` |
 | `SharedJournalOptions` | Configuration (`FlushMode`) |
 | `FlushMode` | `None` (default) or `WriteThrough` |
 | `JournalAppendResult` | Offset and total length of appended record |
 | `JournalRecord` | Offset and payload of a read record |
-| `JournalRecoveryResult` | Valid end offset and record count |
+| `JournalCompactionResult` | Valid end offset and record count |
 
 ## Durability
 
@@ -74,7 +74,7 @@ var result = journal.Recover();
 - ✅ No two writers write to the same byte range
 - ✅ Readers detect incomplete/corrupt tail records
 - ✅ Multiple processes can append concurrently
-- ✅ Recovery stops at first invalid record and resets the tail
+- ✅ Compaction stops at first invalid record and resets the tail
 
 ## Non-guarantees (V1)
 
@@ -93,5 +93,5 @@ dotnet run --project SharedFileJournal.Demo -- stress
 dotnet run --project SharedFileJournal.Demo -- init /tmp/myjournal
 dotnet run --project SharedFileJournal.Demo -- write /tmp/myjournal "hello world"
 dotnet run --project SharedFileJournal.Demo -- read /tmp/myjournal
-dotnet run --project SharedFileJournal.Demo -- recover /tmp/myjournal
+dotnet run --project SharedFileJournal.Demo -- compact /tmp/myjournal
 ```

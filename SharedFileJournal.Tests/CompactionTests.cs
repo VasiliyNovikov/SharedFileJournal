@@ -9,7 +9,7 @@ using SharedFileJournal.Internal;
 namespace SharedFileJournal.Tests;
 
 [TestClass]
-public class RecoveryTests
+public class CompactionTests
 {
     private string _tempDir = null!;
 
@@ -30,30 +30,30 @@ public class RecoveryTests
     private string JournalPath => Path.Combine(_tempDir, "journal");
 
     [TestMethod]
-    public void Recover_EmptyJournal_ReturnsZeroRecords()
+    public void Compact_EmptyJournal_ReturnsZeroRecords()
     {
         using var journal = new SharedJournal(JournalPath);
-        var result = journal.Recover();
+        var result = journal.Compact();
 
         Assert.AreEqual((long)JournalFormat.DataStartOffset, result.ValidEndOffset);
         Assert.AreEqual(0, result.ValidRecordCount);
     }
 
     [TestMethod]
-    public void Recover_ValidJournal_ReturnsAllRecords()
+    public void Compact_ValidJournal_ReturnsAllRecords()
     {
         using var journal = new SharedJournal(JournalPath);
         journal.Append("record1"u8);
         journal.Append("record2"u8);
         journal.Append("record3"u8);
 
-        var result = journal.Recover();
+        var result = journal.Compact();
 
         Assert.AreEqual(3, result.ValidRecordCount);
     }
 
     [TestMethod]
-    public void Recover_PartialLastRecord_UpdatesTail()
+    public void Compact_PartialLastRecord_UpdatesTail()
     {
         long validEnd;
         using (var journal = new SharedJournal(JournalPath))
@@ -73,7 +73,7 @@ public class RecoveryTests
         // Reopen and recover
         using (var journal = new SharedJournal(JournalPath))
         {
-            var result = journal.Recover();
+            var result = journal.Compact();
 
             Assert.AreEqual(2, result.ValidRecordCount);
             Assert.AreEqual(validEnd, result.ValidEndOffset);
@@ -86,7 +86,7 @@ public class RecoveryTests
     }
 
     [TestMethod]
-    public void Recover_CorruptedChecksum_StopsAtCorruption()
+    public void Compact_CorruptedChecksum_StopsAtCorruption()
     {
         using (var journal = new SharedJournal(JournalPath))
         {
@@ -107,7 +107,7 @@ public class RecoveryTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var result = journal.Recover();
+            var result = journal.Compact();
 
             Assert.AreEqual(1, result.ValidRecordCount);
             Assert.AreEqual((long)(JournalFormat.DataStartOffset + firstRecordSize), result.ValidEndOffset);
@@ -115,7 +115,7 @@ public class RecoveryTests
     }
 
     [TestMethod]
-    public void Recover_CompletelyCorruptedFile_ReturnsZero()
+    public void Compact_CompletelyCorruptedFile_ReturnsZero()
     {
         using (var journal = new SharedJournal(JournalPath))
         {
@@ -131,7 +131,7 @@ public class RecoveryTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var result = journal.Recover();
+            var result = journal.Compact();
 
             Assert.AreEqual(0, result.ValidRecordCount);
             Assert.AreEqual((long)JournalFormat.DataStartOffset, result.ValidEndOffset);
@@ -139,7 +139,7 @@ public class RecoveryTests
     }
 
     [TestMethod]
-    public void Recover_UpdatesTail_NextAppendStartsAtValidEnd()
+    public void Compact_UpdatesTail_NextAppendStartsAtValidEnd()
     {
         long validEnd;
         using (var journal = new SharedJournal(JournalPath))
@@ -159,7 +159,7 @@ public class RecoveryTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var result = journal.Recover();
+            var result = journal.Compact();
             Assert.AreEqual(validEnd, result.ValidEndOffset);
 
             // Verify the tail pointer was actually updated (CAS succeeded)
