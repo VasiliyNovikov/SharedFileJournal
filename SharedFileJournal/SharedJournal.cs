@@ -25,7 +25,7 @@ namespace SharedFileJournal;
 /// </para>
 /// <para>
 /// <b>Atomic reservation strategy:</b> The first 4096 bytes of the journal file are mapped
-/// into memory with <see cref="MemoryMappedFile.CreateFromFile(string, FileMode, string?, long, MemoryMappedFileAccess)"/>.
+/// into memory with <see cref="MemoryMappedFile.CreateFromFile(SafeFileHandle, string?, long, MemoryMappedFileAccess, HandleInheritability, bool)"/>.
 /// A raw pointer to the <c>NextWriteOffset</c> field (at a cache-line-aligned offset) is used
 /// with <see cref="Interlocked.Add(ref long, long)"/> for lock-free atomic fetch-add semantics.
 /// This works across processes because the memory-mapped region is backed by the same physical
@@ -63,45 +63,31 @@ public sealed unsafe class SharedJournal : IDisposable
     public SharedJournal(string path, SharedJournalOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(path);
-        options ??= new SharedJournalOptions();
 
-        EnsureJournalFile(path);
+        var fileOptions = (options ?? SharedJournalOptions.Default).FlushMode == FlushMode.None
+            ? FileOptions.None
+            : FileOptions.WriteThrough;
 
-        var fileOptions = options.FlushMode == FlushMode.WriteThrough
-            ? FileOptions.WriteThrough
-            : FileOptions.None;
-        _fileHandle = File.OpenHandle(
-            path, FileMode.Open, FileAccess.ReadWrite,
-            FileShare.ReadWrite, fileOptions);
-
-        // Open a FileStream with ReadWrite sharing for the MMF — CreateFromFile(string, ...)
-        // opens the file internally without FileShare.ReadWrite, which conflicts with
-        // our already-open data handle on Windows.
-        FileStream? metaStream = null;
-        MemoryMappedFile? metaMap = null;
-        MemoryMappedViewAccessor? metaView = null;
+        _fileHandle = File.OpenHandle(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite, fileOptions);
         try
         {
-            metaStream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
-            metaMap = MemoryMappedFile.CreateFromFile(metaStream, null, 0, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: false);
-            metaView = metaMap.CreateViewAccessor(0, JournalFormat.MetadataFileSize, MemoryMappedFileAccess.ReadWrite);
+            if (RandomAccess.GetLength(_fileHandle) < JournalFormat.MetadataFileSize)
+                RandomAccess.SetLength(_fileHandle, JournalFormat.MetadataFileSize);
+
+            _metaMap = MemoryMappedFile.CreateFromFile(_fileHandle, null, 0, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: true);
+            _metaView = _metaMap.CreateViewAccessor(0, JournalFormat.MetadataFileSize, MemoryMappedFileAccess.ReadWrite);
 
             byte* rawPtr = null;
-            metaView.SafeMemoryMappedViewHandle.AcquirePointer(ref rawPtr);
-            rawPtr += metaView.PointerOffset;
+            _metaView.SafeMemoryMappedViewHandle.AcquirePointer(ref rawPtr);
+            rawPtr += _metaView.PointerOffset;
             _meta = (MetadataHeader*)rawPtr;
-            InitializeOrValidateMetadata(_meta);
 
-            _metaMap = metaMap;
-            _metaView = metaView;
+            InitializeOrValidateMetadata(_meta);
         }
         catch
         {
-            metaView?.Dispose();
-            metaMap?.Dispose();
-            // metaStream is disposed by metaMap (leaveOpen: false), only dispose if metaMap wasn't created
-            if (metaMap is null)
-                metaStream?.Dispose();
+            _metaView?.Dispose();
+            _metaMap?.Dispose();
             _fileHandle.Dispose();
             throw;
         }
@@ -120,18 +106,14 @@ public sealed unsafe class SharedJournal : IDisposable
     public JournalAppendResult Append(ReadOnlySpan<byte> payload, FlushMode flushMode = FlushMode.None)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
-
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(
-            payload.Length, int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment, nameof(payload));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(payload.Length, int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment, nameof(payload));
 
         var dataLength = JournalFormat.RecordHeaderSize + payload.Length;
         var alignedLength = JournalFormat.AlignRecordSize(dataLength);
         var offset = ReserveSpace(alignedLength);
 
         byte[]? rented = null;
-        var span = dataLength <= 2048
-            ? stackalloc byte[dataLength]
-            : (rented = ArrayPool<byte>.Shared.Rent(dataLength));
+        var span = dataLength <= 2048 ? stackalloc byte[dataLength] : (rented = ArrayPool<byte>.Shared.Rent(dataLength));
         try
         {
             JournalFormat.WriteRecord(span, payload);
@@ -144,7 +126,7 @@ public sealed unsafe class SharedJournal : IDisposable
         }
 
         if (flushMode == FlushMode.WriteThrough)
-            FlushDataFile();
+            RandomAccess.FlushToDisk(_fileHandle);
 
         return new JournalAppendResult(offset, alignedLength);
     }
@@ -234,19 +216,6 @@ public sealed unsafe class SharedJournal : IDisposable
         _metaView.Dispose();
         _metaMap.Dispose();
         _fileHandle.Dispose();
-    }
-
-    private void FlushDataFile()
-    {
-        RandomAccess.FlushToDisk(_fileHandle);
-    }
-
-    private static void EnsureJournalFile(string path)
-    {
-        using var fs = new FileStream(
-            path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
-        if (fs.Length < JournalFormat.MetadataFileSize)
-            fs.SetLength(JournalFormat.MetadataFileSize);
     }
 
     private static void InitializeOrValidateMetadata(MetadataHeader* meta)

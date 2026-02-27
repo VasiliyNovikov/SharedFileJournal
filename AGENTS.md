@@ -16,7 +16,7 @@ dotnet build
 dotnet test
 
 # Run a single test
-dotnet test--filter 'FullyQualifiedName~ClassName.MethodName'
+dotnet test --filter 'FullyQualifiedName~ClassName.MethodName'
 ```
 ## Build Configuration
 

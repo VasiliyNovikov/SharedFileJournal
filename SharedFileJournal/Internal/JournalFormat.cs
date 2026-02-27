@@ -29,14 +29,12 @@ internal static unsafe class JournalFormat
     /// <summary>
     /// Returns the on-disk size of a record, rounded up to <see cref="RecordAlignment"/>.
     /// </summary>
-    public static int AlignRecordSize(int unalignedSize) =>
-        (unalignedSize + RecordAlignment - 1) & ~(RecordAlignment - 1);
+    public static int AlignRecordSize(int unalignedSize) => (unalignedSize + RecordAlignment - 1) & ~(RecordAlignment - 1);
 
     /// <summary>
     /// Rounds a file offset up to the next <see cref="RecordAlignment"/> boundary.
     /// </summary>
-    public static long AlignUp(long offset) =>
-        (offset + RecordAlignment - 1) & ~(long)(RecordAlignment - 1);
+    public static long AlignUp(long offset) => (offset + RecordAlignment - 1) & ~(long)(RecordAlignment - 1);
 
     /// <summary>
     /// Writes a complete record (header + payload) into <paramref name="buffer"/>.
