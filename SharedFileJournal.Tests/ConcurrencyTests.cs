@@ -153,9 +153,12 @@ public class ConcurrencyTests
         })).ToArray();
 
         Task.WaitAll(tasks);
+        journal.Dispose();
 
-        var result = journal.Compact();
-        Assert.AreEqual(threadCount * recordsPerThread, result.ValidRecordCount);
+        SharedJournal.Compact(JournalPath);
+
+        using var compactedJournal = new SharedJournal(JournalPath);
+        Assert.AreEqual(threadCount * recordsPerThread, compactedJournal.ReadAll().Count());
     }
 
     [TestMethod]

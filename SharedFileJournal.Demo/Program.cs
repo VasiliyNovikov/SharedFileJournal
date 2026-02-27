@@ -61,11 +61,8 @@ void Read()
 
 void CompactJournal()
 {
-    using var journal = new SharedJournal(basePath);
-    var result = journal.Compact();
-    Console.WriteLine($"Compaction complete:");
-    Console.WriteLine($"  Valid records: {result.ValidRecordCount}");
-    Console.WriteLine($"  Valid end offset: {result.ValidEndOffset}");
+    SharedJournal.Compact(basePath);
+    Console.WriteLine("Compaction complete.");
 }
 
 void Stress()
@@ -128,7 +125,8 @@ void Stress()
     }
 
     // Compaction check
-    var recovery = journal.Compact();
-    Console.WriteLine($"Compaction: {recovery.ValidRecordCount} valid records");
+    journal.Dispose();
+    SharedJournal.Compact(basePath);
+    Console.WriteLine("Compaction passed!");
     Console.WriteLine("All checks passed!");
 }

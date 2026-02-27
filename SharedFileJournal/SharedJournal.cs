@@ -40,7 +40,7 @@ namespace SharedFileJournal;
 /// </para>
 /// <para>
 /// <b>Disposal contract:</b> Callers must ensure that no concurrent operations
-/// (<see cref="Append"/>, <see cref="ReadAll"/>, <see cref="Compact"/>) are in flight
+/// (<see cref="Append"/>, <see cref="ReadAll"/>) are in flight
 /// when <see cref="Dispose"/> is called. This is a deliberate design choice to avoid
 /// adding synchronization overhead to the lock-free write path.
 /// </para>
@@ -142,68 +142,55 @@ public sealed unsafe class SharedJournal : IDisposable
     }
 
     /// <summary>
-    /// Scans the journal from the beginning, validates each record, and resets the
-    /// write offset to reclaim space reserved by incomplete or corrupted writes.
+    /// Flushes all buffered data to the underlying storage device.
     /// </summary>
-    /// <remarks>
-    /// This method must not be called while other writers are concurrently appending.
-    /// Doing so may cause newly appended records to be orphaned.
-    /// </remarks>
-    [SkipLocalsInit]
-    public JournalCompactionResult Compact()
+    public void Flush()
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        RandomAccess.FlushToDisk(_fileHandle);
+    }
 
-        var fileLength = RandomAccess.GetLength(_fileHandle);
-        var currentTail = GetNextWriteOffset();
-        var scanEnd = Math.Max(fileLength, currentTail);
+    /// <summary>
+    /// Compacts the journal at the specified path, reclaiming space from gaps left by
+    /// crashed writers and removing corrupted or incomplete records.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Creates a temporary journal, copies all valid records from the source (skipping gaps
+    /// and corrupted regions), then atomically replaces the original file. The source file
+    /// is untouched until the swap, making this operation crash-safe.
+    /// </para>
+    /// <para>
+    /// <b>Exclusive access required:</b> No other processes or instances may have the journal
+    /// file open when this method is called. On Windows, open file handles prevent the file
+    /// replacement. On Linux, stale handles would continue referencing the old (replaced) file.
+    /// </para>
+    /// </remarks>
+    /// <param name="path">Path to the journal file to compact.</param>
+    public static void Compact(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
 
-        long offset = JournalFormat.DataStartOffset;
-        var validCount = 0;
-        Span<byte> headerBuf = stackalloc byte[JournalFormat.RecordHeaderSize];
+        var tempPath = path + ".compact";
+        File.Delete(tempPath);
 
-        while (offset + JournalFormat.MinRecordSize <= scanEnd)
+        using (var source = new SharedJournal(path))
+        using (var temp = new SharedJournal(tempPath))
         {
-            if (RandomAccess.Read(_fileHandle, headerBuf, offset) < JournalFormat.RecordHeaderSize)
-                break;
-
-            var header = MemoryMarshal.Read<RecordHeader>(headerBuf);
-            if (!header.IsValid())
-                break;
-
-            var totalRecordLength = JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + header.PayloadLength);
-            if (offset + totalRecordLength > scanEnd)
-                break;
-
-            var payloadBuf = new byte[header.PayloadLength];
-            if (header.PayloadLength > 0 &&
-                RandomAccess.Read(_fileHandle, payloadBuf, offset + JournalFormat.RecordHeaderSize) < header.PayloadLength)
-                break;
-
-            if (JournalFormat.ComputeChecksum(payloadBuf) != header.Checksum)
-                break;
-
-            offset += totalRecordLength;
-            validCount++;
+            foreach (var record in source.ReadAll())
+                temp.Append(record.Payload.Span);
+            temp.Flush();
         }
 
-        if (offset != currentTail)
-        {
-            var previous = CompareAndSetNextWriteOffset(currentTail, offset);
-            if (previous != currentTail)
-                throw new InvalidOperationException(
-                    $"Compaction failed: concurrent modification detected. Expected tail {currentTail}, actual {previous}.");
-        }
-
-        return new JournalCompactionResult(offset, validCount);
+        File.Move(tempPath, path, overwrite: true);
     }
 
     /// <summary>
     /// Releases all resources used by this journal instance.
     /// </summary>
     /// <remarks>
-    /// Callers must ensure that no concurrent <see cref="Append"/>, <see cref="ReadAll"/>,
-    /// or <see cref="Compact"/> operations are in flight when this method is called.
+    /// Callers must ensure that no concurrent <see cref="Append"/> or <see cref="ReadAll"/>
+    /// operations are in flight when this method is called.
     /// Accessing the journal from another thread during or after disposal leads to
     /// undefined behavior (use-after-free of memory-mapped pointers).
     /// </remarks>
@@ -262,9 +249,6 @@ public sealed unsafe class SharedJournal : IDisposable
 
     private long GetNextWriteOffset() =>
         Volatile.Read(ref _meta->NextWriteOffset);
-
-    private long CompareAndSetNextWriteOffset(long expected, long value) =>
-        Interlocked.CompareExchange(ref _meta->NextWriteOffset, value, expected);
 
     private IEnumerable<JournalRecord> ReadRecords()
     {

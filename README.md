@@ -47,20 +47,19 @@ journal.Append(myPayloadBytes);
 foreach (var record in journal.ReadAll())
     Console.WriteLine($"offset={record.Offset} len={record.Payload.Length}");
 
-// Compact after a crash (resets tail to last valid record, reclaims wasted space)
-var result = journal.Compact();
+// Compact: reclaim space from gaps and corrupted records (requires exclusive access)
+SharedJournal.Compact("/path/to/myjournal");
 ```
 
 ## API
 
 | Type | Description |
 |------|-------------|
-| `SharedJournal` | Main entry point — `Append`, `ReadAll`, `Compact`, `Dispose` |
+| `SharedJournal` | Main entry point — `Append`, `ReadAll`, `Flush`, `Compact` (static), `Dispose` |
 | `SharedJournalOptions` | Configuration (`FlushMode`) |
 | `FlushMode` | `None` (default) or `WriteThrough` |
 | `JournalAppendResult` | Offset and total length of appended record |
 | `JournalRecord` | Offset and payload of a read record |
-| `JournalCompactionResult` | Valid end offset and record count |
 
 ## Durability
 
@@ -74,13 +73,13 @@ var result = journal.Compact();
 - ✅ No two writers write to the same byte range
 - ✅ Readers detect incomplete/corrupt tail records
 - ✅ Multiple processes can append concurrently
-- ✅ Compaction stops at first invalid record and resets the tail
+- ✅ Compaction reclaims space from gaps left by crashed writers
+- ✅ Compaction skips over corrupted records and recovers valid records on both sides
 
 ## Non-guarantees (V1)
 
-- ❌ No reclamation of space reserved by crashed writers
 - ❌ No stable global commit order beyond reservation order
-- ❌ No compaction, deletion, or indexing
+- ❌ No indexing or deletion of individual records
 - ❌ Not a transactional database or queue
 
 ## Demo
