@@ -31,6 +31,14 @@ Padding:           0–15 bytes to align total record size to 16-byte boundary
 Records are aligned to 16-byte boundaries so that recovery scanning can step by alignment
 instead of byte-by-byte, eliminating chunk-overlap logic.
 
+### Skip markers
+
+When `ReadAll` encounters a gap (from a crashed writer) and scans forward to find the next
+valid record, it writes a **skip marker** at the gap start using an atomic 8-byte CAS via
+a memory-mapped pointer. Skip markers have the same 16-byte header layout with magic `"SFJS"`
+and `PayloadLength` set to the gap body size. Future readers see the skip marker and jump
+over the gap in O(1) instead of re-scanning.
+
 ## Quick Start
 
 ```csharp
@@ -74,7 +82,7 @@ SharedJournal.Compact("/path/to/myjournal");
 - ✅ Readers detect incomplete/corrupt tail records
 - ✅ Multiple processes can append concurrently
 - ✅ Compaction reclaims space from gaps left by crashed writers
-- ✅ Compaction skips over corrupted records and recovers valid records on both sides
+- ✅ Readers automatically fix up gaps with skip markers for faster subsequent reads
 
 ## Non-guarantees (V1)
 

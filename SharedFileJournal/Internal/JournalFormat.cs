@@ -21,6 +21,7 @@ internal static unsafe class JournalFormat
 
     // Record constants
     public const uint RecordHeaderMagic = 0x524A4653;  // "SFJR" little-endian
+    public const uint SkipHeaderMagic = 0x534A4653;    // "SFJS" little-endian
     public const int RecordAlignment = 16;
 
     public static readonly int RecordHeaderSize = sizeof(RecordHeader);
