@@ -31,7 +31,7 @@ SharedFileJournal uses a single file per journal:
 - Records follow immediately after, starting at offset 4096
 
 ### Core types
-- `SharedJournal` — Main entry point (Open/Append/ReadAll/Recover/Dispose)
+- `SharedJournal` — Main entry point (Append/ReadAll/Recover/Dispose)
 - `JournalFormat` (internal) — Record serialization, header/trailer layout, FNV-1a checksum
 - `SharedJournalOptions` / `FlushMode` — Configuration
 

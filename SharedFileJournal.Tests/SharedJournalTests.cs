@@ -32,7 +32,7 @@ public class SharedJournalTests
     [TestMethod]
     public void Open_CreatesFile()
     {
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
 
         Assert.IsTrue(File.Exists(JournalPath));
     }
@@ -40,7 +40,7 @@ public class SharedJournalTests
     [TestMethod]
     public void Append_SingleRecord_CanReadBack()
     {
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var payload = "hello world"u8.ToArray();
 
         var result = journal.Append(payload);
@@ -56,7 +56,7 @@ public class SharedJournalTests
     [TestMethod]
     public void Append_MultipleRecords_AllReadable()
     {
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var payloads = new[]
         {
             "first"u8.ToArray(),
@@ -76,7 +76,7 @@ public class SharedJournalTests
     [TestMethod]
     public void Append_EmptyPayload_Works()
     {
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         journal.Append(ReadOnlySpan<byte>.Empty);
 
         var records = journal.ReadAll().ToList();
@@ -87,7 +87,7 @@ public class SharedJournalTests
     [TestMethod]
     public void Append_LargePayload_Works()
     {
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var payload = new byte[1024 * 1024]; // 1 MB
         new Random(42).NextBytes(payload);
 
@@ -101,7 +101,7 @@ public class SharedJournalTests
     [TestMethod]
     public void ReadAll_EmptyJournal_ReturnsEmpty()
     {
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var records = journal.ReadAll().ToList();
         Assert.AreEqual(0, records.Count);
     }
@@ -109,7 +109,7 @@ public class SharedJournalTests
     [TestMethod]
     public void Append_RecordOffsets_AreSequential()
     {
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var payload1 = "aaa"u8.ToArray();
         var payload2 = "bbbbb"u8.ToArray();
 
@@ -125,12 +125,12 @@ public class SharedJournalTests
     {
         var payload = "persistent data"u8.ToArray();
 
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             journal.Append(payload);
         }
 
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             var records = journal.ReadAll().ToList();
             Assert.AreEqual(1, records.Count);
@@ -141,7 +141,7 @@ public class SharedJournalTests
     [TestMethod]
     public void Append_VariableSizes_ManyRecords()
     {
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var rng = new Random(123);
         var expected = new byte[100][];
 
@@ -161,7 +161,7 @@ public class SharedJournalTests
     [TestMethod]
     public void ReadAll_SkipsBrokenRecord_ReturnsValidRecords()
     {
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             journal.Append("first"u8);
             journal.Append("second"u8);
@@ -176,7 +176,7 @@ public class SharedJournalTests
             fs.Write(new byte[JournalFormat.RecordHeaderSize]); // zero out header
         }
 
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             var records = journal.ReadAll().ToList();
             Assert.AreEqual(2, records.Count);
@@ -188,7 +188,7 @@ public class SharedJournalTests
     [TestMethod]
     public void ReadAll_SkipsCorruptedChecksum_ReturnsOtherRecords()
     {
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             journal.Append("good1"u8);
             journal.Append("bad!!"u8);
@@ -205,7 +205,7 @@ public class SharedJournalTests
             fs.WriteByte(0xFF);
         }
 
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             var records = journal.ReadAll().ToList();
             Assert.AreEqual(2, records.Count);
@@ -230,7 +230,7 @@ public class SharedJournalTests
         }
 
         // Open should detect partial init after spin timeout and complete it
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         journal.Append("after recovery"u8);
         var records = journal.ReadAll().ToList();
         Assert.AreEqual(1, records.Count);

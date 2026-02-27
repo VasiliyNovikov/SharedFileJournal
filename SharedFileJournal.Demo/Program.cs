@@ -35,20 +35,20 @@ switch (command)
 
 void Init()
 {
-    using var journal = SharedJournal.Open(basePath);
+    using var journal = new SharedJournal(basePath);
     Console.WriteLine($"Journal initialized at: {basePath}");
 }
 
 void Write(string message)
 {
-    using var journal = SharedJournal.Open(basePath);
+    using var journal = new SharedJournal(basePath);
     var result = journal.Append(Encoding.UTF8.GetBytes(message));
     Console.WriteLine($"Appended record at offset {result.Offset}, length {result.TotalRecordLength}");
 }
 
 void Read()
 {
-    using var journal = SharedJournal.Open(basePath);
+    using var journal = new SharedJournal(basePath);
     var count = 0;
     foreach (var record in journal.ReadAll())
     {
@@ -61,7 +61,7 @@ void Read()
 
 void RecoverJournal()
 {
-    using var journal = SharedJournal.Open(basePath);
+    using var journal = new SharedJournal(basePath);
     var result = journal.Recover();
     Console.WriteLine($"Recovery complete:");
     Console.WriteLine($"  Valid records: {result.ValidRecordCount}");
@@ -79,7 +79,7 @@ void Stress()
     // Clean start
     if (File.Exists(basePath)) File.Delete(basePath);
 
-    using var journal = SharedJournal.Open(basePath);
+    using var journal = new SharedJournal(basePath);
 
     var sw = Stopwatch.StartNew();
     var barrier = new Barrier(threadCount);

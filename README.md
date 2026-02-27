@@ -37,7 +37,7 @@ instead of byte-by-byte, eliminating chunk-overlap logic.
 using SharedFileJournal;
 
 // Open (or create) a journal — safe for multiple processes
-using var journal = SharedJournal.Open("/path/to/myjournal");
+using var journal = new SharedJournal("/path/to/myjournal");
 
 // Append records (thread-safe, process-safe)
 journal.Append("hello"u8);
@@ -55,7 +55,7 @@ var result = journal.Recover();
 
 | Type | Description |
 |------|-------------|
-| `SharedJournal` | Main entry point — `Open`, `Append`, `ReadAll`, `Recover`, `Dispose` |
+| `SharedJournal` | Main entry point — `Append`, `ReadAll`, `Recover`, `Dispose` |
 | `SharedJournalOptions` | Configuration (`FlushMode`) |
 | `FlushMode` | `None` (default) or `WriteThrough` |
 | `JournalAppendResult` | Offset and total length of appended record |

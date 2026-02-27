@@ -53,14 +53,6 @@ public sealed unsafe class SharedJournal : IDisposable
     private readonly MetadataHeader* _meta;
     private int _disposed;
 
-    private SharedJournal(SafeFileHandle fileHandle, MemoryMappedFile metaMap, MemoryMappedViewAccessor metaView, MetadataHeader* meta)
-    {
-        _fileHandle = fileHandle;
-        _metaMap = metaMap;
-        _metaView = metaView;
-        _meta = meta;
-    }
-
     /// <summary>
     /// Opens or creates a journal at the specified file path.
     /// </summary>
@@ -68,8 +60,7 @@ public sealed unsafe class SharedJournal : IDisposable
     /// Path to the journal file. The file contains both the metadata header and record data.
     /// </param>
     /// <param name="options">Optional configuration. Uses defaults if <c>null</c>.</param>
-    /// <returns>A <see cref="SharedJournal"/> instance ready for concurrent use.</returns>
-    public static SharedJournal Open(string path, SharedJournalOptions? options = null)
+    public SharedJournal(string path, SharedJournalOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         options ??= new SharedJournalOptions();
@@ -79,7 +70,7 @@ public sealed unsafe class SharedJournal : IDisposable
         var fileOptions = options.FlushMode == FlushMode.WriteThrough
             ? FileOptions.WriteThrough
             : FileOptions.None;
-        var fileHandle = File.OpenHandle(
+        _fileHandle = File.OpenHandle(
             path, FileMode.Open, FileAccess.ReadWrite,
             FileShare.ReadWrite, fileOptions);
 
@@ -98,10 +89,11 @@ public sealed unsafe class SharedJournal : IDisposable
             byte* rawPtr = null;
             metaView.SafeMemoryMappedViewHandle.AcquirePointer(ref rawPtr);
             rawPtr += metaView.PointerOffset;
-            var meta = (MetadataHeader*)rawPtr;
-            InitializeOrValidateMetadata(meta);
+            _meta = (MetadataHeader*)rawPtr;
+            InitializeOrValidateMetadata(_meta);
 
-            return new SharedJournal(fileHandle, metaMap, metaView, meta);
+            _metaMap = metaMap;
+            _metaView = metaView;
         }
         catch
         {
@@ -110,7 +102,7 @@ public sealed unsafe class SharedJournal : IDisposable
             // metaStream is disposed by metaMap (leaveOpen: false), only dispose if metaMap wasn't created
             if (metaMap is null)
                 metaStream?.Dispose();
-            fileHandle.Dispose();
+            _fileHandle.Dispose();
             throw;
         }
     }

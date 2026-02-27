@@ -37,7 +37,7 @@ public class ConcurrencyTests
         const int threadCount = 8;
         const int recordsPerThread = 500;
 
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var allResults = new List<JournalAppendResult>[threadCount];
 
         var barrier = new Barrier(threadCount);
@@ -79,7 +79,7 @@ public class ConcurrencyTests
         const int threadCount = 4;
         const int recordsPerThread = 1000;
 
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var barrier = new Barrier(threadCount);
 
         var tasks = Enumerable.Range(0, threadCount).Select(t => Task.Run(() =>
@@ -112,7 +112,7 @@ public class ConcurrencyTests
         const int threadCount = 4;
         const int recordsPerThread = 500;
 
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var barrier = new Barrier(threadCount);
 
         var tasks = Enumerable.Range(0, threadCount).Select(t => Task.Run(() =>
@@ -139,7 +139,7 @@ public class ConcurrencyTests
         const int threadCount = 4;
         const int recordsPerThread = 200;
 
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var barrier = new Barrier(threadCount);
 
         var tasks = Enumerable.Range(0, threadCount).Select(t => Task.Run(() =>
@@ -164,8 +164,8 @@ public class ConcurrencyTests
         const int recordsPerInstance = 200;
 
         // Two journal instances sharing the same files (simulates multi-process)
-        using var journal1 = SharedJournal.Open(JournalPath);
-        using var journal2 = SharedJournal.Open(JournalPath);
+        using var journal1 = new SharedJournal(JournalPath);
+        using var journal2 = new SharedJournal(JournalPath);
 
         var barrier = new Barrier(2);
 

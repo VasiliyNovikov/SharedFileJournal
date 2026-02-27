@@ -32,7 +32,7 @@ public class RecoveryTests
     [TestMethod]
     public void Recover_EmptyJournal_ReturnsZeroRecords()
     {
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         var result = journal.Recover();
 
         Assert.AreEqual((long)JournalFormat.DataStartOffset, result.ValidEndOffset);
@@ -42,7 +42,7 @@ public class RecoveryTests
     [TestMethod]
     public void Recover_ValidJournal_ReturnsAllRecords()
     {
-        using var journal = SharedJournal.Open(JournalPath);
+        using var journal = new SharedJournal(JournalPath);
         journal.Append("record1"u8);
         journal.Append("record2"u8);
         journal.Append("record3"u8);
@@ -56,7 +56,7 @@ public class RecoveryTests
     public void Recover_PartialLastRecord_UpdatesTail()
     {
         long validEnd;
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             journal.Append("good record"u8);
             var r = journal.Append("another good"u8);
@@ -71,7 +71,7 @@ public class RecoveryTests
         }
 
         // Reopen and recover
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             var result = journal.Recover();
 
@@ -88,7 +88,7 @@ public class RecoveryTests
     [TestMethod]
     public void Recover_CorruptedChecksum_StopsAtCorruption()
     {
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             journal.Append("good"u8);
             journal.Append("will be corrupted"u8);
@@ -105,7 +105,7 @@ public class RecoveryTests
             fs.WriteByte(0xFF);
         }
 
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             var result = journal.Recover();
 
@@ -117,7 +117,7 @@ public class RecoveryTests
     [TestMethod]
     public void Recover_CompletelyCorruptedFile_ReturnsZero()
     {
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             journal.Append("will be destroyed"u8);
         }
@@ -129,7 +129,7 @@ public class RecoveryTests
             fs.Write(new byte[100]);
         }
 
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             var result = journal.Recover();
 
@@ -142,7 +142,7 @@ public class RecoveryTests
     public void Recover_UpdatesTail_NextAppendStartsAtValidEnd()
     {
         long validEnd;
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             journal.Append("good"u8);
             var r = journal.Append("also good"u8);
@@ -157,7 +157,7 @@ public class RecoveryTests
             fs.Write(new byte[JournalFormat.RecordHeaderSize]);
         }
 
-        using (var journal = SharedJournal.Open(JournalPath))
+        using (var journal = new SharedJournal(JournalPath))
         {
             var result = journal.Recover();
             Assert.AreEqual(validEnd, result.ValidEndOffset);
