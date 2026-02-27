@@ -34,7 +34,7 @@ namespace SharedFileJournal;
 /// alignment of the target field, which is guaranteed by placing it at offset 64.
 /// </para>
 /// <para>
-/// <b>Platform assumptions:</b> Works on Windows and Linux with .NET 10+. Relies on
+/// <b>Platform assumptions:</b> Works on Windows, Linux, and macOS with .NET 10+. Relies on
 /// <see cref="MemoryMappedFile.CreateFromFile(string, FileMode)"/> (no named shared memory)
 /// and <see cref="RandomAccess"/> for portable I/O.
 /// </para>

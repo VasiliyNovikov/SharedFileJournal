@@ -7,7 +7,7 @@ A cross-platform .NET library for **high-speed concurrent multi-process append**
 - **Multi-process safe**: Multiple processes can append concurrently via atomic offset reservation
 - **No file locks on writes**: Uses `Interlocked.Add` on a memory-mapped metadata region for lock-free space reservation, then `RandomAccess.Write` at the reserved offset
 - **Recoverable format**: Self-validating records (header with FNV-1a checksum, aligned to 16-byte boundaries) let readers detect and recover from partial/crashed writes
-- **Cross-platform**: Works on Windows and Linux with .NET 10+
+- **Cross-platform**: Works on Windows, Linux, and macOS with .NET 10+
 
 ## Architecture
 
