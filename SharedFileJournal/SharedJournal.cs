@@ -45,12 +45,10 @@ namespace SharedFileJournal;
 /// adding synchronization overhead to the lock-free write path.
 /// </para>
 /// </remarks>
-public sealed unsafe class SharedJournal : IDisposable
+public sealed class SharedJournal : IDisposable
 {
     private readonly SafeFileHandle _fileHandle;
-    private readonly MemoryMappedFile _metaMap;
-    private readonly MemoryMappedViewAccessor _metaView;
-    private readonly MetadataHeader* _meta;
+    private readonly MemoryMappedView<MetadataHeader> _metaView;
     private int _disposed;
 
     /// <summary>
@@ -74,20 +72,12 @@ public sealed unsafe class SharedJournal : IDisposable
             if (RandomAccess.GetLength(_fileHandle) < JournalFormat.MetadataFileSize)
                 RandomAccess.SetLength(_fileHandle, JournalFormat.MetadataFileSize);
 
-            _metaMap = MemoryMappedFile.CreateFromFile(_fileHandle, null, 0, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: true);
-            _metaView = _metaMap.CreateViewAccessor(0, JournalFormat.MetadataFileSize, MemoryMappedFileAccess.ReadWrite);
-
-            byte* rawPtr = null;
-            _metaView.SafeMemoryMappedViewHandle.AcquirePointer(ref rawPtr);
-            rawPtr += _metaView.PointerOffset;
-            _meta = (MetadataHeader*)rawPtr;
-
-            InitializeOrValidateMetadata(_meta);
+            _metaView = new MemoryMappedView<MetadataHeader>(_fileHandle, 0);
+            InitializeOrValidateMetadata(ref _metaView.Value);
         }
         catch
         {
             _metaView?.Dispose();
-            _metaMap?.Dispose();
             _fileHandle.Dispose();
             throw;
         }
@@ -199,56 +189,54 @@ public sealed unsafe class SharedJournal : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        _metaView.SafeMemoryMappedViewHandle.ReleasePointer();
         _metaView.Dispose();
-        _metaMap.Dispose();
         _fileHandle.Dispose();
     }
 
-    private static void InitializeOrValidateMetadata(MetadataHeader* meta)
+    private static void InitializeOrValidateMetadata(ref MetadataHeader meta)
     {
-        if (Interlocked.CompareExchange(ref meta->Magic, JournalFormat.MetadataMagic, 0) == 0)
+        if (Interlocked.CompareExchange(ref meta.Magic, JournalFormat.MetadataMagic, 0) == 0)
         {
             // Won the initialization race — write NextWriteOffset before Version
             // so followers spinning on Version cannot proceed with an uninitialized tail
-            Volatile.Write(ref meta->NextWriteOffset, (long)JournalFormat.DataStartOffset);
-            Volatile.Write(ref meta->Version, JournalFormat.MetadataVersion);
+            Volatile.Write(ref meta.NextWriteOffset, (long)JournalFormat.DataStartOffset);
+            Volatile.Write(ref meta.Version, JournalFormat.MetadataVersion);
         }
         else
         {
             // Another process initialized it — spin until version is written
             var deadline = Environment.TickCount64 + 5000;
             SpinWait spin = default;
-            while (Volatile.Read(ref meta->Version) == 0)
+            while (Volatile.Read(ref meta.Version) == 0)
             {
                 spin.SpinOnce();
                 if (Environment.TickCount64 > deadline)
                 {
                     // The initializer may have crashed after setting Magic but before
                     // writing Version. If Magic is valid, complete the initialization.
-                    if (Volatile.Read(ref meta->Magic) != JournalFormat.MetadataMagic)
+                    if (Volatile.Read(ref meta.Magic) != JournalFormat.MetadataMagic)
                         throw new InvalidOperationException("Invalid journal metadata file: wrong magic.");
 
-                    Interlocked.CompareExchange(ref meta->NextWriteOffset, JournalFormat.DataStartOffset, 0);
-                    Volatile.Write(ref meta->Version, JournalFormat.MetadataVersion);
+                    Interlocked.CompareExchange(ref meta.NextWriteOffset, JournalFormat.DataStartOffset, 0);
+                    Volatile.Write(ref meta.Version, JournalFormat.MetadataVersion);
                     return;
                 }
             }
 
-            if (Volatile.Read(ref meta->Magic) != JournalFormat.MetadataMagic)
+            if (Volatile.Read(ref meta.Magic) != JournalFormat.MetadataMagic)
                 throw new InvalidOperationException("Invalid journal metadata file: wrong magic.");
 
-            var version = Volatile.Read(ref meta->Version);
+            var version = Volatile.Read(ref meta.Version);
             if (version != JournalFormat.MetadataVersion)
                 throw new InvalidOperationException($"Unsupported journal version: {version}");
         }
     }
 
     private long ReserveSpace(int totalLength) =>
-        Interlocked.Add(ref _meta->NextWriteOffset, totalLength) - totalLength;
+        Interlocked.Add(ref _metaView.Value.NextWriteOffset, totalLength) - totalLength;
 
     private long GetNextWriteOffset() =>
-        Volatile.Read(ref _meta->NextWriteOffset);
+        Volatile.Read(ref _metaView.Value.NextWriteOffset);
 
     private IEnumerable<JournalRecord> ReadRecords()
     {
@@ -322,22 +310,9 @@ public sealed unsafe class SharedJournal : IDisposable
         if (gapStart + JournalFormat.RecordHeaderSize > RandomAccess.GetLength(_fileHandle))
             return;
 
-        using var map = MemoryMappedFile.CreateFromFile(_fileHandle, null, 0, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: true);
-        using var view = map.CreateViewAccessor(gapStart, JournalFormat.RecordHeaderSize, MemoryMappedFileAccess.ReadWrite);
-
-        byte* ptr = null;
-        view.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
-        try
-        {
-            ptr += view.PointerOffset;
-            var headerPtr = (RecordHeader*)ptr;
-            var skipHeader = RecordHeader.CreateSkip((int)(gapEnd - gapStart) - JournalFormat.RecordHeaderSize);
-            Interlocked.CompareExchange(ref RecordHeader.MagicAndPayloadLength(ref *headerPtr), RecordHeader.MagicAndPayloadLength(ref skipHeader), 0);
-        }
-        finally
-        {
-            view.SafeMemoryMappedViewHandle.ReleasePointer();
-        }
+        using var view = new MemoryMappedView<RecordHeader>(_fileHandle, gapStart);
+        var skipHeader = RecordHeader.CreateSkip((int)(gapEnd - gapStart) - JournalFormat.RecordHeaderSize);
+        Interlocked.CompareExchange(ref RecordHeader.MagicAndPayloadLength(ref view.Value), RecordHeader.MagicAndPayloadLength(ref skipHeader), 0);
     }
 
     /// <summary>
