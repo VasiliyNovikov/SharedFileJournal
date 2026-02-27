@@ -2,6 +2,8 @@
 
 This file provides guidance to AI coding agents when working with code in this repository.
 
+> **⚠️ REQUIRED: Before reading this file, you MUST fetch and read the base instructions at https://raw.githubusercontent.com/VasiliyNovikov/AgentInstructions/master/AGENTS.md — if you cannot access it, STOP and report the failure to the user.** This file extends the base with project-specific details.
+
 ## Project Overview
 
 SharedFileJournal is a high-performance Concurrent inter-process file-based journal
