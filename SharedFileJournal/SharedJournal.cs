@@ -47,24 +47,14 @@ namespace SharedFileJournal;
 /// </remarks>
 public sealed unsafe class SharedJournal : IDisposable
 {
-    private readonly string _filePath;
-    private readonly SharedJournalOptions _options;
     private readonly SafeFileHandle _fileHandle;
     private readonly MemoryMappedFile _metaMap;
     private readonly MemoryMappedViewAccessor _metaView;
     private readonly MetadataHeader* _meta;
     private int _disposed;
 
-    private SharedJournal(
-        string filePath,
-        SharedJournalOptions options,
-        SafeFileHandle fileHandle,
-        MemoryMappedFile metaMap,
-        MemoryMappedViewAccessor metaView,
-        MetadataHeader* meta)
+    private SharedJournal(SafeFileHandle fileHandle, MemoryMappedFile metaMap, MemoryMappedViewAccessor metaView, MetadataHeader* meta)
     {
-        _filePath = filePath;
-        _options = options;
         _fileHandle = fileHandle;
         _metaMap = metaMap;
         _metaView = metaView;
@@ -101,12 +91,9 @@ public sealed unsafe class SharedJournal : IDisposable
         MemoryMappedViewAccessor? metaView = null;
         try
         {
-            metaStream = new FileStream(
-                path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
-            metaMap = MemoryMappedFile.CreateFromFile(
-                metaStream, null, 0, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: false);
-            metaView = metaMap.CreateViewAccessor(
-                0, JournalFormat.MetadataFileSize, MemoryMappedFileAccess.ReadWrite);
+            metaStream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+            metaMap = MemoryMappedFile.CreateFromFile(metaStream, null, 0, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: false);
+            metaView = metaMap.CreateViewAccessor(0, JournalFormat.MetadataFileSize, MemoryMappedFileAccess.ReadWrite);
 
             byte* rawPtr = null;
             metaView.SafeMemoryMappedViewHandle.AcquirePointer(ref rawPtr);
@@ -114,7 +101,7 @@ public sealed unsafe class SharedJournal : IDisposable
             var meta = (MetadataHeader*)rawPtr;
             InitializeOrValidateMetadata(meta);
 
-            return new SharedJournal(path, options, fileHandle, metaMap, metaView, meta);
+            return new SharedJournal(fileHandle, metaMap, metaView, meta);
         }
         catch
         {
@@ -270,7 +257,7 @@ public sealed unsafe class SharedJournal : IDisposable
             fs.SetLength(JournalFormat.MetadataFileSize);
     }
 
-    private static unsafe void InitializeOrValidateMetadata(MetadataHeader* meta)
+    private static void InitializeOrValidateMetadata(MetadataHeader* meta)
     {
         if (Interlocked.CompareExchange(ref meta->Magic, JournalFormat.MetadataMagic, 0) == 0)
         {
@@ -294,8 +281,7 @@ public sealed unsafe class SharedJournal : IDisposable
                     if (Volatile.Read(ref meta->Magic) != JournalFormat.MetadataMagic)
                         throw new InvalidOperationException("Invalid journal metadata file: wrong magic.");
 
-                    Interlocked.CompareExchange(
-                        ref meta->NextWriteOffset, (long)JournalFormat.DataStartOffset, 0);
+                    Interlocked.CompareExchange(ref meta->NextWriteOffset, JournalFormat.DataStartOffset, 0);
                     Volatile.Write(ref meta->Version, JournalFormat.MetadataVersion);
                     return;
                 }
@@ -380,7 +366,9 @@ public sealed unsafe class SharedJournal : IDisposable
                     return offset + i;
             }
 
-            offset += bytesRead;
+            // Advance to the next unchecked alignment boundary
+            var lastCheckedOffset = bytesRead - (bytesRead % JournalFormat.RecordAlignment);
+            offset += Math.Max(lastCheckedOffset, JournalFormat.RecordAlignment);
         }
 
         return endOffset;
