@@ -281,6 +281,10 @@ public sealed unsafe class SharedJournal : IDisposable
 
             if (Volatile.Read(ref meta->Magic) != JournalFormat.MetadataMagic)
                 throw new InvalidOperationException("Invalid journal metadata file: wrong magic.");
+
+            var version = Volatile.Read(ref meta->Version);
+            if (version != JournalFormat.MetadataVersion)
+                throw new InvalidOperationException($"Unsupported journal version: {version}");
         }
     }
 
