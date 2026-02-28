@@ -1,3 +1,5 @@
+using System.IO;
+
 namespace SharedFileJournal;
 
 /// <summary>
@@ -5,6 +7,8 @@ namespace SharedFileJournal;
 /// </summary>
 public sealed class SharedJournalOptions
 {
+    internal FileShare FileShare { get; init; } = FileShare.ReadWrite;
+
     /// <summary>
     /// Controls write durability. Default is <see cref="FlushMode.None"/>.
     /// </summary>

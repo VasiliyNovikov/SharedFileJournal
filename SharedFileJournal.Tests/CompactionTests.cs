@@ -308,6 +308,15 @@ public class CompactionTests
     }
 
     [TestMethod]
+    public void Compact_WhileJournalOpen_ThrowsIOException()
+    {
+        using var journal = new SharedJournal(JournalPath);
+        journal.Append("data"u8);
+
+        Assert.ThrowsExactly<IOException>(() => SharedJournal.Compact(JournalPath));
+    }
+
+    [TestMethod]
     public void Compact_AppendAfterCompaction_Works()
     {
         using (var journal = new SharedJournal(JournalPath))

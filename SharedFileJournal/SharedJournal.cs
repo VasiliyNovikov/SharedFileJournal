@@ -70,7 +70,7 @@ public sealed class SharedJournal : IDisposable
             ? FileOptions.None
             : FileOptions.WriteThrough;
 
-        _fileHandle = File.OpenHandle(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite, fileOptions);
+        _fileHandle = File.OpenHandle(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, opts.FileShare, fileOptions);
         try
         {
             if (RandomAccess.GetLength(_fileHandle) < JournalFormat.MetadataFileSize)
@@ -168,7 +168,8 @@ public sealed class SharedJournal : IDisposable
         var tempPath = path + ".compact";
         File.Delete(tempPath);
 
-        using (var source = new SharedJournal(path))
+        var exclusiveOptions = new SharedJournalOptions { FileShare = FileShare.None };
+        using (var source = new SharedJournal(path, exclusiveOptions))
         using (var temp = new SharedJournal(tempPath))
         {
             foreach (var record in source.ReadAll())
