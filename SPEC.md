@@ -486,7 +486,27 @@ is not otherwise modified.
 After compaction, the journal contains only valid records packed contiguously
 with no gaps, and `NextWriteOffset` points to the end of the last record.
 
-### 7.4 Crash Safety
+### 7.4 Exclusive Access
+
+Opening the source with `FileShare.None` (step 2) provides best-effort
+enforcement: if another process already has the journal open, the open
+fails with `IOException`. On .NET, this is enforced via `flock()` on Unix
+and mandatory file sharing on Windows.
+
+However, the exclusive lock is released when the source journal is closed
+(step 6), **before** the file replacement (step 7). There is a brief race
+window where another process could open the journal between steps 6 and 7:
+
+- **Windows**: The new handle prevents `File.Move` from replacing the file,
+  so the rename fails and data is safe.
+- **Unix**: `rename()` succeeds regardless of open handles. The new
+  opener's file descriptor silently refers to the old (now unlinked) inode,
+  and its subsequent writes are lost.
+
+Callers must ensure quiescence at the application level (e.g., stopping all
+writer processes) before invoking `Compact`.
+
+### 7.5 Crash Safety
 
 If the process crashes during compaction:
 - Before step 7: The original file is untouched (except for skip markers).

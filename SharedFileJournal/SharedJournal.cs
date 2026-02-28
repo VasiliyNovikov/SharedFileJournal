@@ -163,9 +163,14 @@ public sealed class SharedJournal : IDisposable
     /// <see cref="ReadAll"/>), but the record data is not otherwise modified until the swap.
     /// </para>
     /// <para>
-    /// <b>Exclusive access required:</b> No other processes or instances may have the journal
-    /// file open when this method is called. On Windows, open file handles prevent the file
-    /// replacement. On Linux, stale handles would continue referencing the old (replaced) file.
+    /// <b>Exclusive access required:</b> The caller must ensure no other processes or instances
+    /// have the journal file open when this method is called.
+    /// Opening the source with <see cref="FileShare"/>.<c>None</c> provides best-effort
+    /// enforcement (fails with <see cref="IOException"/> if another handle exists), but the
+    /// exclusive lock is released before the file replacement. On Windows, open handles from
+    /// a late opener would cause the replacement to fail. On Unix, the rename succeeds and any
+    /// late opener's handle silently refers to the old (unlinked) file, so its writes are lost.
+    /// Callers should ensure quiescence at the application level before invoking this method.
     /// </para>
     /// </remarks>
     /// <param name="path">Path to the journal file to compact.</param>
