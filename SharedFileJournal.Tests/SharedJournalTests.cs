@@ -6,6 +6,7 @@ using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 using SharedFileJournal.Internal;
+
 namespace SharedFileJournal.Tests;
 
 [TestClass]
@@ -235,5 +236,55 @@ public class SharedJournalTests
         var records = journal.ReadAll().ToList();
         Assert.AreEqual(1, records.Count);
         Assert.AreEqual("after recovery", Encoding.UTF8.GetString(records[0].Payload.Span));
+    }
+
+    [TestMethod]
+    public void Append_AfterDispose_Throws()
+    {
+        var journal = new SharedJournal(JournalPath);
+        journal.Dispose();
+
+        Assert.ThrowsExactly<ObjectDisposedException>(() => journal.Append("data"u8));
+    }
+
+    [TestMethod]
+    public void ReadAll_AfterDispose_Throws()
+    {
+        var journal = new SharedJournal(JournalPath);
+        journal.Dispose();
+
+        Assert.ThrowsExactly<ObjectDisposedException>(() => journal.ReadAll());
+    }
+
+    [TestMethod]
+    public void Flush_AfterDispose_Throws()
+    {
+        var journal = new SharedJournal(JournalPath);
+        journal.Dispose();
+
+        Assert.ThrowsExactly<ObjectDisposedException>(() => journal.Flush());
+    }
+
+    [TestMethod]
+    public void Constructor_NullPath_Throws()
+    {
+        Assert.ThrowsExactly<ArgumentNullException>(() => new SharedJournal(null!));
+    }
+
+    [TestMethod]
+    public void Flush_AfterAppend_DoesNotThrow()
+    {
+        using var journal = new SharedJournal(JournalPath);
+        journal.Append("data"u8);
+        journal.Flush();
+
+        var records = journal.ReadAll().ToList();
+        Assert.AreEqual(1, records.Count);
+    }
+
+    [TestMethod]
+    public void Compact_NullPath_Throws()
+    {
+        Assert.ThrowsExactly<ArgumentNullException>(() => SharedJournal.Compact(null!));
     }
 }

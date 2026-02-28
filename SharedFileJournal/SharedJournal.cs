@@ -340,9 +340,9 @@ public sealed class SharedJournal : IDisposable
                     return offset + i;
             }
 
-            // Advance to the next unchecked alignment boundary
-            var lastCheckedOffset = bytesRead - (bytesRead % JournalFormat.RecordAlignment);
-            offset += Math.Max(lastCheckedOffset, JournalFormat.RecordAlignment);
+            // Advance past the last checked alignment boundary
+            var lastChecked = (bytesRead - sizeof(uint)) / JournalFormat.RecordAlignment * JournalFormat.RecordAlignment;
+            offset += lastChecked + JournalFormat.RecordAlignment;
         }
 
         return endOffset;

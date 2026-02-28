@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.MemoryMappedFiles;
+using System.Threading;
 
 using Microsoft.Win32.SafeHandles;
 
@@ -14,6 +15,7 @@ internal sealed unsafe class MemoryMappedView<T> : IDisposable where T : unmanag
     private readonly MemoryMappedFile _map;
     private readonly MemoryMappedViewAccessor _view;
     private readonly T* _pointer;
+    private int _disposed;
 
     public MemoryMappedView(SafeFileHandle fileHandle, long offset)
     {
@@ -37,6 +39,9 @@ internal sealed unsafe class MemoryMappedView<T> : IDisposable where T : unmanag
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         _view.SafeMemoryMappedViewHandle.ReleasePointer();
         _view.Dispose();
         _map.Dispose();

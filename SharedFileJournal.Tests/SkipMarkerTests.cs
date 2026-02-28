@@ -52,7 +52,7 @@ public class SkipMarkerTests
         // First read — should scan and write a skip marker
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = _ = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToList();
             Assert.AreEqual(2, records.Count);
         }
 
@@ -97,7 +97,7 @@ public class SkipMarkerTests
         // Second read — should use skip marker (same results, faster)
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = _ = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("before"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("after"u8.ToArray(), records[1].Payload.ToArray());
@@ -132,7 +132,7 @@ public class SkipMarkerTests
         // Reopen and verify skip marker is used correctly
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = _ = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("first"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("last"u8.ToArray(), records[1].Payload.ToArray());
@@ -199,7 +199,7 @@ public class SkipMarkerTests
         // First read — writes skip markers
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = _ = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToList();
             Assert.AreEqual(3, records.Count);
         }
 
@@ -239,7 +239,7 @@ public class SkipMarkerTests
         // Read — CAS should fail because magic is non-zero
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = _ = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToList();
             Assert.AreEqual(2, records.Count);
         }
 
@@ -284,7 +284,7 @@ public class SkipMarkerTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = _ = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("keep-a"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("keep-b"u8.ToArray(), records[1].Payload.ToArray());
