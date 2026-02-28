@@ -162,6 +162,21 @@ public class ConcurrencyTests
     }
 
     [TestMethod]
+    public void MultipleJournalInstances_LockFileShared()
+    {
+        using var journal1 = new SharedJournal(JournalPath);
+        using var journal2 = new SharedJournal(JournalPath);
+        using var journal3 = new SharedJournal(JournalPath);
+
+        journal1.Append("from-j1"u8);
+        journal2.Append("from-j2"u8);
+        journal3.Append("from-j3"u8);
+
+        var records = journal1.ReadAll().ToList();
+        Assert.AreEqual(3, records.Count);
+    }
+
+    [TestMethod]
     public void MultipleJournalInstances_SameFiles_ConcurrentAppend()
     {
         const int recordsPerInstance = 200;

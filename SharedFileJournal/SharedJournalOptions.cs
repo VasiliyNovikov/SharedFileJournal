@@ -9,6 +9,8 @@ public sealed class SharedJournalOptions
 {
     internal FileShare FileShare { get; init; } = FileShare.ReadWrite;
 
+    internal bool AcquireLockFile { get; init; } = true;
+
     /// <summary>
     /// Controls write durability. Default is <see cref="FlushMode.None"/>.
     /// </summary>

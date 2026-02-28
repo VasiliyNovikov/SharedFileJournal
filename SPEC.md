@@ -457,27 +457,36 @@ removed.
 ### 7.1 Procedure
 
 ```
-  1. Delete any stale <path>.compact file from a previous interrupted run.
+  1. Acquire an exclusive lock on the sidecar lock file <path>.lock
+     (FileShare.None). This blocks concurrent SharedJournal instances
+     that hold the lock in shared mode (see section 8.6).
 
-  2. Open the source journal with FileShare.None (exclusive access).
+  2. Delete any stale <path>.compact file from a previous interrupted run.
 
-  3. Create a new temporary journal at <path>.compact.
+  3. Open the source journal with FileShare.None (exclusive access).
+     The inner journal skips lock file acquisition (AcquireLockFile = false)
+     since the caller already holds it.
 
-  4. Iterate source.ReadAll():
+  4. Create a new temporary journal at <path>.compact (also with
+     AcquireLockFile = false to avoid creating a spurious .compact.lock file).
+
+  5. Iterate source.ReadAll():
        - For each valid record, Append its payload to the temp journal.
        - Corrupted regions and skip markers are not copied.
 
-  5. Flush the temporary journal to disk.
+  6. Flush the temporary journal to disk.
 
-  6. Close both journals.
+  7. Close both journals.
 
-  7. File.Move(<path>.compact, <path>, overwrite: true)
+  8. File.Move(<path>.compact, <path>, overwrite: true)
        - Atomic on most filesystems.
+
+  9. Release the exclusive lock on <path>.lock (implicit via Dispose).
 ```
 
 ### 7.2 Side Effects
 
-The read pass (step 4) may write skip markers to the **source** file when
+The read pass (step 5) may write skip markers to the **source** file when
 corruption is encountered (see section 6.5). The record data in the source
 is not otherwise modified.
 
@@ -486,25 +495,27 @@ is not otherwise modified.
 After compaction, the journal contains only valid records packed contiguously
 with no gaps, and `NextWriteOffset` points to the end of the last record.
 
-### 7.4 Exclusive Access
+### 7.4 Lock File Protocol
 
-Opening the source with `FileShare.None` (step 2) provides best-effort
-enforcement: if another process already has the journal open, the open
-fails with `IOException`. On .NET, this is enforced via `flock()` on Unix
-and mandatory file sharing on Windows.
+A sidecar lock file (`<path>.lock`) coordinates Compact with concurrent
+journal instances:
 
-However, the exclusive lock is released when the source journal is closed
-(step 6), **before** the file replacement (step 7). There is a brief race
-window where another process could open the journal between steps 6 and 7:
+- **Normal instances** acquire the lock file in **shared** mode
+  (`FileShare.ReadWrite`) during construction. Multiple instances can
+  coexist.
+- **Compact** acquires the lock file in **exclusive** mode
+  (`FileShare.None`) before opening the source journal (step 2). This
+  blocks until all shared holders have released, and prevents new
+  instances from opening until the entire operation — including the
+  file replacement (step 8) — is complete.
 
-- **Windows**: The new handle prevents `File.Move` from replacing the file,
-  so the rename fails and data is safe.
-- **Unix**: `rename()` succeeds regardless of open handles. The new
-  opener's file descriptor silently refers to the old (now unlinked) inode,
-  and its subsequent writes are lost.
+This eliminates the race window that previously existed between closing the
+source journal (step 7) and the file replacement (step 8). On Unix,
+without the lock file, `rename()` succeeds regardless of open handles, and
+a late opener's file descriptor would silently refer to the old (unlinked)
+inode, causing its writes to be lost.
 
-Callers must ensure quiescence at the application level (e.g., stopping all
-writer processes) before invoking `Compact`.
+The lock file is persistent and is never deleted.
 
 ### 7.5 Crash Safety
 
@@ -590,6 +601,25 @@ The initialization protocol relies on the following ordering:
 
 This establishes a happens-before relationship:
 `Write(NextWriteOffset) -> Write(Version) -> Read(Version) -> Read(NextWriteOffset)`
+
+### 8.6 Lock File Protocol
+
+A companion lock file (`<path>.lock`) provides cooperative exclusion
+between normal journal instances and the `Compact` operation.
+
+- **Normal instances** open the lock file with `FileShare.ReadWrite`
+  (shared mode) during construction. Multiple instances can hold the
+  lock simultaneously and coexist without interference.
+- **Compact** opens the lock file with `FileShare.None` (exclusive mode)
+  before opening the source journal. This blocks until all shared holders
+  have released their locks, and prevents new instances from opening.
+- The exclusive lock is held through the entire compaction operation,
+  including the `File.Move` that replaces the journal file. This
+  eliminates the race window described in section 7.4.
+- Inner journals opened by Compact (source and temp) skip lock file
+  acquisition (`AcquireLockFile = false`) since the caller already holds
+  the exclusive lock.
+- The lock file is persistent and is never deleted.
 
 ---
 

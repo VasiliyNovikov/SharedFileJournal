@@ -39,6 +39,13 @@ namespace SharedFileJournal;
 /// and <see cref="RandomAccess"/> for portable I/O.
 /// </para>
 /// <para>
+/// <b>Companion lock file:</b> Each journal instance acquires a shared lock on a sidecar
+/// file (<c>&lt;path&gt;.lock</c>) for the duration of its lifetime. The
+/// <see cref="Compact"/> method acquires this lock exclusively, ensuring no journal
+/// instances can be open during compaction and that the lock is held through the file
+/// replacement.
+/// </para>
+/// <para>
 /// <b>Disposal contract:</b> Callers must ensure that no concurrent operations
 /// (<see cref="Append"/>, <see cref="ReadAll"/>) are in flight
 /// when <see cref="Dispose"/> is called. This is a deliberate design choice to avoid
@@ -47,6 +54,7 @@ namespace SharedFileJournal;
 /// </remarks>
 public sealed class SharedJournal : IDisposable
 {
+    private readonly JournalLockFile? _lock;
     private readonly SafeFileHandle _fileHandle;
     private readonly MemoryMappedView<MetadataHeader> _metaView;
     private readonly int _maxPayloadLength;
@@ -68,13 +76,17 @@ public sealed class SharedJournal : IDisposable
         ArgumentOutOfRangeException.ThrowIfGreaterThan(opts.MaxPayloadLength, int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment, nameof(SharedJournalOptions.MaxPayloadLength));
         _maxPayloadLength = opts.MaxPayloadLength;
 
-        var fileOptions = opts.FlushMode == FlushMode.None
-            ? FileOptions.None
-            : FileOptions.WriteThrough;
-
-        _fileHandle = File.OpenHandle(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, opts.FileShare, fileOptions);
         try
         {
+            if (opts.AcquireLockFile)
+                _lock = new JournalLockFile(path, FileShare.ReadWrite);
+
+            var fileOptions = opts.FlushMode == FlushMode.None
+                ? FileOptions.None
+                : FileOptions.WriteThrough;
+
+            _fileHandle = File.OpenHandle(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, opts.FileShare, fileOptions);
+
             if (RandomAccess.GetLength(_fileHandle) < JournalFormat.MetadataFileSize)
                 RandomAccess.SetLength(_fileHandle, JournalFormat.MetadataFileSize);
 
@@ -84,7 +96,8 @@ public sealed class SharedJournal : IDisposable
         catch
         {
             _metaView?.Dispose();
-            _fileHandle.Dispose();
+            _fileHandle?.Dispose();
+            _lock?.Dispose();
             throw;
         }
     }
@@ -163,14 +176,13 @@ public sealed class SharedJournal : IDisposable
     /// <see cref="ReadAll"/>), but the record data is not otherwise modified until the swap.
     /// </para>
     /// <para>
-    /// <b>Exclusive access required:</b> The caller must ensure no other processes or instances
-    /// have the journal file open when this method is called.
-    /// Opening the source with <see cref="FileShare"/>.<c>None</c> provides best-effort
-    /// enforcement (fails with <see cref="IOException"/> if another handle exists), but the
-    /// exclusive lock is released before the file replacement. On Windows, open handles from
-    /// a late opener would cause the replacement to fail. On Unix, the rename succeeds and any
-    /// late opener's handle silently refers to the old (unlinked) file, so its writes are lost.
-    /// Callers should ensure quiescence at the application level before invoking this method.
+    /// <b>Lock file protocol:</b> Acquires an exclusive lock on a companion lock file
+    /// (<c>&lt;path&gt;.lock</c>) before opening the source journal. Normal
+    /// <see cref="SharedJournal"/> instances hold this lock in shared mode, so the exclusive
+    /// acquisition blocks until all existing instances are closed and prevents new ones from
+    /// opening. The lock is held through the entire operation including the
+    /// <see cref="File.Move(string, string, bool)"/> that replaces the journal file,
+    /// eliminating the race window between closing the source and the rename.
     /// </para>
     /// </remarks>
     /// <param name="path">Path to the journal file to compact.</param>
@@ -185,11 +197,18 @@ public sealed class SharedJournal : IDisposable
         ArgumentNullException.ThrowIfNull(path);
 
         var tempPath = path + ".compact";
+        var maxPayloadLength = (options ?? SharedJournalOptions.Default).MaxPayloadLength;
+
+        // Exclusive lock — held through entire operation including File.Move
+        using var journalLock = new JournalLockFile(path, FileShare.None);
+
         File.Delete(tempPath);
 
-        var maxPayloadLength = (options ?? SharedJournalOptions.Default).MaxPayloadLength;
-        var sourceOptions = new SharedJournalOptions { FileShare = FileShare.None, MaxPayloadLength = maxPayloadLength };
-        var tempOptions = new SharedJournalOptions { MaxPayloadLength = maxPayloadLength };
+        var sourceOptions = new SharedJournalOptions
+            { FileShare = FileShare.None, AcquireLockFile = false, MaxPayloadLength = maxPayloadLength };
+        var tempOptions = new SharedJournalOptions
+            { AcquireLockFile = false, MaxPayloadLength = maxPayloadLength };
+
         using (var source = new SharedJournal(path, sourceOptions))
         using (var temp = new SharedJournal(tempPath, tempOptions))
         {
@@ -199,6 +218,7 @@ public sealed class SharedJournal : IDisposable
         }
 
         File.Move(tempPath, path, overwrite: true);
+        // journalLock disposed here — after the rename
     }
 
     /// <summary>
@@ -217,6 +237,7 @@ public sealed class SharedJournal : IDisposable
 
         _metaView.Dispose();
         _fileHandle.Dispose();
+        _lock?.Dispose();
     }
 
     private static void InitializeOrValidateMetadata(ref MetadataHeader meta)

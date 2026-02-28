@@ -358,4 +358,46 @@ public class CompactionTests
             CollectionAssert.AreEqual("after compact"u8.ToArray(), records[1].Payload.ToArray());
         }
     }
+
+    [TestMethod]
+    public void Compact_LockFileBlocksConcurrentOpen()
+    {
+        using (var journal = new SharedJournal(JournalPath))
+        {
+            journal.Append("data"u8);
+        }
+
+        // Hold the lock file exclusively, simulating an in-progress Compact
+        using var exclusiveLock = File.OpenHandle(JournalPath + ".lock", FileMode.OpenOrCreate,
+            FileAccess.ReadWrite, FileShare.None);
+
+        Assert.ThrowsExactly<IOException>(() => new SharedJournal(JournalPath));
+    }
+
+    [TestMethod]
+    public void Compact_LockFilePersistsAfterCompaction()
+    {
+        using (var journal = new SharedJournal(JournalPath))
+        {
+            journal.Append("data"u8);
+        }
+
+        SharedJournal.Compact(JournalPath);
+
+        Assert.IsTrue(File.Exists(JournalPath + ".lock"));
+    }
+
+    [TestMethod]
+    public void Compact_NoSpuriousLockFileForTempJournal()
+    {
+        using (var journal = new SharedJournal(JournalPath))
+        {
+            journal.Append("data"u8);
+        }
+
+        SharedJournal.Compact(JournalPath);
+
+        Assert.IsFalse(File.Exists(JournalPath + ".compact.lock"),
+            "No lock file should be created for the temporary compact journal.");
+    }
 }

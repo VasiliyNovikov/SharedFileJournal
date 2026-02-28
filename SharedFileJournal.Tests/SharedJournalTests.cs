@@ -40,6 +40,14 @@ public class SharedJournalTests
     }
 
     [TestMethod]
+    public void Open_CreatesLockFile()
+    {
+        using var journal = new SharedJournal(JournalPath);
+
+        Assert.IsTrue(File.Exists(JournalPath + ".lock"));
+    }
+
+    [TestMethod]
     public void Append_SingleRecord_CanReadBack()
     {
         using var journal = new SharedJournal(JournalPath);
