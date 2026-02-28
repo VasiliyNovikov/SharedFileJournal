@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -286,5 +287,53 @@ public class SharedJournalTests
     public void Compact_NullPath_Throws()
     {
         Assert.ThrowsExactly<ArgumentNullException>(() => SharedJournal.Compact(null!));
+    }
+
+    [TestMethod]
+    public void ReadAll_SkipsOversizedPayload_ReturnsOtherRecords()
+    {
+        var options = new SharedJournalOptions { MaxPayloadLength = 64 };
+
+        using (var journal = new SharedJournal(JournalPath, options))
+        {
+            journal.Append("first"u8);
+            journal.Append("second"u8);
+            journal.Append("third"u8);
+        }
+
+        // Corrupt the second record's PayloadLength to exceed MaxPayloadLength
+        // while keeping the magic valid so IsValid() passes
+        var firstRecordSize = JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + 5);
+        var secondRecordOffset = JournalFormat.DataStartOffset + firstRecordSize;
+        using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+        {
+            // Read the existing header
+            var headerBuf = new byte[JournalFormat.RecordHeaderSize];
+            fs.Seek(secondRecordOffset, SeekOrigin.Begin);
+            fs.ReadExactly(headerBuf);
+
+            // Overwrite PayloadLength (bytes 4-7) with a value exceeding MaxPayloadLength
+            var oversizedLength = BitConverter.GetBytes(1024);
+            fs.Seek(secondRecordOffset + sizeof(uint), SeekOrigin.Begin);
+            fs.Write(oversizedLength);
+        }
+
+        using (var journal = new SharedJournal(JournalPath, options))
+        {
+            var records = journal.ReadAll().ToList();
+            Assert.AreEqual(2, records.Count);
+            Assert.AreEqual("first", Encoding.UTF8.GetString(records[0].Payload.Span));
+            Assert.AreEqual("third", Encoding.UTF8.GetString(records[1].Payload.Span));
+        }
+    }
+
+    [TestMethod]
+    public void Append_PayloadExceedsMaxLength_Throws()
+    {
+        var options = new SharedJournalOptions { MaxPayloadLength = 64 };
+        using var journal = new SharedJournal(JournalPath, options);
+
+        var oversized = new byte[65];
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => journal.Append(oversized));
     }
 }

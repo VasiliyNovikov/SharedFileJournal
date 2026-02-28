@@ -49,6 +49,7 @@ public sealed class SharedJournal : IDisposable
 {
     private readonly SafeFileHandle _fileHandle;
     private readonly MemoryMappedView<MetadataHeader> _metaView;
+    private readonly int _maxPayloadLength;
     private int _disposed;
 
     /// <summary>
@@ -62,7 +63,10 @@ public sealed class SharedJournal : IDisposable
     {
         ArgumentNullException.ThrowIfNull(path);
 
-        var fileOptions = (options ?? SharedJournalOptions.Default).FlushMode == FlushMode.None
+        var opts = options ?? SharedJournalOptions.Default;
+        _maxPayloadLength = opts.MaxPayloadLength;
+
+        var fileOptions = opts.FlushMode == FlushMode.None
             ? FileOptions.None
             : FileOptions.WriteThrough;
 
@@ -96,7 +100,7 @@ public sealed class SharedJournal : IDisposable
     public JournalAppendResult Append(ReadOnlySpan<byte> payload, FlushMode flushMode = FlushMode.None)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(payload.Length, int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment, nameof(payload));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(payload.Length, _maxPayloadLength, nameof(payload));
 
         var dataLength = JournalFormat.RecordHeaderSize + payload.Length;
         var alignedLength = JournalFormat.AlignRecordSize(dataLength);
@@ -262,12 +266,9 @@ public sealed class SharedJournal : IDisposable
                 // Corrupted skip marker — fall through to scan
             }
 
-            if (!header.IsValid())
+            if (!header.IsValid() || header.PayloadLength > _maxPayloadLength)
             {
-                var nextOffset = ScanForNextMagic(offset + 1, tail);
-                if (nextOffset > offset && nextOffset < tail)
-                    TryWriteSkipMarker(offset, nextOffset);
-                offset = nextOffset;
+                SkipCorruptedRegion(ref offset, tail);
                 continue;
             }
 
@@ -279,25 +280,27 @@ public sealed class SharedJournal : IDisposable
             if (header.PayloadLength > 0 &&
                 RandomAccess.Read(_fileHandle, payloadBuf, offset + JournalFormat.RecordHeaderSize) < header.PayloadLength)
             {
-                var nextOffset = ScanForNextMagic(offset + 1, tail);
-                if (nextOffset > offset && nextOffset < tail)
-                    TryWriteSkipMarker(offset, nextOffset);
-                offset = nextOffset;
+                SkipCorruptedRegion(ref offset, tail);
                 continue;
             }
 
             if (JournalFormat.ComputeChecksum(payloadBuf) != header.Checksum)
             {
-                var nextOffset = ScanForNextMagic(offset + 1, tail);
-                if (nextOffset > offset && nextOffset < tail)
-                    TryWriteSkipMarker(offset, nextOffset);
-                offset = nextOffset;
+                SkipCorruptedRegion(ref offset, tail);
                 continue;
             }
 
             yield return new JournalRecord(offset, payloadBuf);
             offset += totalRecordLength;
         }
+    }
+
+    private void SkipCorruptedRegion(ref long offset, long tail)
+    {
+        var nextOffset = ScanForNextMagic(offset + 1, tail);
+        if (nextOffset > offset && nextOffset < tail)
+            TryWriteSkipMarker(offset, nextOffset);
+        offset = nextOffset;
     }
 
     /// <summary>
