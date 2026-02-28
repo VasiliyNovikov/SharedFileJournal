@@ -356,7 +356,19 @@ public sealed class SharedJournal : IDisposable
         var scanLimit = (long)Math.Min((ulong)tail, (ulong)offset + (ulong)maxGap);
         var nextOffset = ScanForNextMagic(offset + 1, scanLimit);
         if (nextOffset > offset && nextOffset < tail)
-            TryWriteSkipMarker(offset, nextOffset, originalSlotValue);
+        {
+            // Only write a skip marker when the observed magic is not a recognized
+            // record or skip magic. If magic == RecordHeaderMagic, a concurrent writer
+            // may have written the header (magic + payload length) but not yet completed
+            // the checksum and payload — the CAS would match the partially-written header
+            // and overwrite it with a skip marker, permanently losing the in-flight record.
+            // For unrecognized magic (zeros, garbage), no writer can be in-flight at this
+            // offset, so the skip marker is safe. If a writer starts after we captured
+            // originalSlotValue, it will write RecordHeaderMagic, making the CAS fail.
+            var observedMagic = (uint)(originalSlotValue & 0xFFFFFFFF);
+            if (observedMagic != JournalFormat.RecordHeaderMagic && observedMagic != JournalFormat.SkipHeaderMagic)
+                TryWriteSkipMarker(offset, nextOffset, originalSlotValue);
+        }
         offset = nextOffset;
     }
 

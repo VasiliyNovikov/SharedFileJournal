@@ -256,6 +256,79 @@ public class SkipMarkerTests
     }
 
     [TestMethod]
+    public void ReadAll_ChecksumMismatchWithValidMagic_DoesNotWriteSkipMarker()
+    {
+        long corruptOffset;
+        using (var journal = new SharedJournal(JournalPath))
+        {
+            journal.Append("before"u8);
+            var r = journal.Append("corrupt me"u8);
+            corruptOffset = r.Offset;
+            journal.Append("after"u8);
+        }
+
+        // Corrupt the payload (but leave the SFJR magic and PayloadLength intact)
+        // This simulates a partially-written record from an in-flight writer
+        using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+        {
+            fs.Seek(corruptOffset + JournalFormat.RecordHeaderSize, SeekOrigin.Begin);
+            fs.Write(new byte[10]); // zeros over the payload → checksum mismatch
+        }
+
+        // ReadAll should recover past the corrupted record
+        using (var journal = new SharedJournal(JournalPath))
+        {
+            var records = journal.ReadAll().ToList();
+            Assert.AreEqual(2, records.Count);
+            CollectionAssert.AreEqual("before"u8.ToArray(), records[0].Payload.ToArray());
+            CollectionAssert.AreEqual("after"u8.ToArray(), records[1].Payload.ToArray());
+        }
+
+        // Verify NO skip marker was written — the SFJR magic must be preserved
+        // because a concurrent writer could still be in-flight
+        var headerBuf = new byte[JournalFormat.RecordHeaderSize];
+        using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            fs.Seek(corruptOffset, SeekOrigin.Begin);
+            fs.ReadExactly(headerBuf);
+        }
+
+        var header = MemoryMarshal.Read<RecordHeader>(headerBuf);
+        Assert.AreEqual(JournalFormat.RecordHeaderMagic, header.Magic,
+            "Skip marker must NOT be written when the observed magic is RecordHeaderMagic.");
+    }
+
+    [TestMethod]
+    public void ReadAll_CorruptChecksumWithValidMagic_StillRecoversOnReread()
+    {
+        long corruptOffset;
+        using (var journal = new SharedJournal(JournalPath))
+        {
+            journal.Append("first"u8);
+            var r = journal.Append("will corrupt"u8);
+            corruptOffset = r.Offset;
+            journal.Append("last"u8);
+        }
+
+        // Corrupt checksum field only (leave magic, payload length, and payload intact)
+        using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+        {
+            fs.Seek(corruptOffset + 8, SeekOrigin.Begin); // checksum is at offset 8 in header
+            fs.Write(new byte[8]); // zero the checksum → mismatch
+        }
+
+        // Multiple reads should all recover correctly without a skip marker
+        for (var i = 0; i < 3; i++)
+        {
+            using var journal = new SharedJournal(JournalPath);
+            var records = journal.ReadAll().ToList();
+            Assert.AreEqual(2, records.Count, $"Read pass {i}: expected 2 records");
+            CollectionAssert.AreEqual("first"u8.ToArray(), records[0].Payload.ToArray());
+            CollectionAssert.AreEqual("last"u8.ToArray(), records[1].Payload.ToArray());
+        }
+    }
+
+    [TestMethod]
     public void Compact_RemovesSkipMarkers()
     {
         long gapOffset;

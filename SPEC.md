@@ -376,8 +376,10 @@ When an invalid header, checksum mismatch, or truncated read is detected:
      RecordHeaderMagic (0x524A4653) or SkipHeaderMagic (0x534A4653).
 
   3. If a candidate is found at nextOffset:
-       - Attempt to write a skip marker at offset covering
-         the gap [offset, nextOffset) (see section 6.5)
+       - If the observed magic at offset is not a recognized value
+         (not RecordHeaderMagic and not SkipHeaderMagic), attempt to
+         write a skip marker at offset covering the gap
+         [offset, nextOffset) (see section 6.5)
        - Set offset = nextOffset and continue the read loop
 
   4. If no candidate is found before the scan limit:
@@ -415,9 +417,16 @@ file.
 ### 6.5 Skip Marker Write (Atomic CAS)
 
 Skip markers are written atomically to avoid overwriting a concurrent writer's
-in-progress record:
+in-progress record. **A skip marker write is only attempted when the observed
+magic at the corrupted offset is not a recognized value** (not `RecordHeaderMagic`
+and not `SkipHeaderMagic`). This prevents a race with in-flight writers
+(see section 6.6).
 
 ```
+  0. Pre-check: extract the magic (lower 4 bytes) from the captured
+     originalSlotValue. If it equals RecordHeaderMagic or SkipHeaderMagic,
+     do NOT attempt the CAS — skip this step entirely.
+
   1. Capture the original 8-byte value at [offset..offset+8)
      (Magic + PayloadLength as a single long) when first reading the header.
 
@@ -441,11 +450,56 @@ in-progress record:
 ```
 
 This is safe because:
+- The pre-check ensures we never attempt to overwrite an offset where a
+  writer may be in-flight (see section 6.6).
 - If the slot still contains the original corrupted/zero value, the CAS
   succeeds and the skip marker is written.
 - If a concurrent writer has since written a valid record header at this
-  offset, the CAS fails (the comparand no longer matches) and the skip
-  marker is not written, preserving the valid record.
+  offset (after we captured originalSlotValue), the CAS fails (the
+  comparand no longer matches) and the skip marker is not written,
+  preserving the valid record.
+
+### 6.6 In-Flight Writer Safety
+
+A `RandomAccess.Write` call is **not atomic** — the OS may make individual
+bytes visible to concurrent readers in any order. When a writer has reserved
+space and begun writing, a reader may observe a partially-written record:
+
+```
+  Writer (in progress)              Reader (concurrent)
+  ────────────────────              ───────────────────
+  ReserveSpace(alignedLen)
+  RandomAccess.Write(header+payload)
+    ┊ first 8 bytes land on disk    Read header → Magic=SFJR, PayloadLength=N
+    ┊ checksum/payload not yet      originalSlotValue = SFJR|N
+    ┊ visible (still zeros)         Read payload → zeros (not yet written)
+    ┊                               Checksum mismatch!
+    ┊                               SkipCorruptedRegion(originalSlotValue)
+    ┊                                 ↓
+    ┊                               CAS(SFJR|N → SFJS|skip)  ← DANGEROUS
+    ┊                               CAS succeeds (first 8 bytes match)
+    ┊                               Skip marker overwrites record header
+  Remaining bytes land ──────────>  Writer payload is orphaned
+```
+
+The record is **permanently lost**: the header now says "skip" while the
+payload data follows it.
+
+**Mitigation:** The corruption recovery code (section 6.3) only attempts
+skip marker writes when the observed magic is **not** `RecordHeaderMagic`
+or `SkipHeaderMagic`. When the magic is a recognized value but the checksum
+does not match, the reader scans forward to the next record without writing,
+avoiding interference with in-flight writers.
+
+For unrecognized magic (zeros or garbage), no writer can be in-flight —
+a writer always writes `RecordHeaderMagic` as part of its header, so the
+CAS comparand (the unrecognized value) would fail if a writer began writing
+after the value was captured.
+
+**Trade-off:** If a writer crashes after writing the header but before
+completing the payload, the partially-written record will not receive a
+skip marker. Subsequent reads must re-scan past it each time. Compaction
+(section 7) eliminates these regions.
 
 ---
 
