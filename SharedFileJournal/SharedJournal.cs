@@ -128,9 +128,14 @@ public sealed class SharedJournal : IDisposable
     }
 
     /// <summary>
-    /// Reads all valid records from the journal sequentially.
-    /// Stops at the first invalid or incomplete record.
+    /// Reads all valid records from the journal sequentially, skipping corrupted or
+    /// incomplete regions and continuing to recover subsequent records.
     /// </summary>
+    /// <remarks>
+    /// When corruption is encountered, the reader scans forward for the next valid record
+    /// header and may write skip markers to the journal file so that future reads can
+    /// efficiently bypass the corrupted region.
+    /// </remarks>
     public IEnumerable<JournalRecord> ReadAll()
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -153,8 +158,9 @@ public sealed class SharedJournal : IDisposable
     /// <remarks>
     /// <para>
     /// Creates a temporary journal, copies all valid records from the source (skipping gaps
-    /// and corrupted regions), then atomically replaces the original file. The source file
-    /// is untouched until the swap, making this operation crash-safe.
+    /// and corrupted regions), then atomically replaces the original file. The read pass may
+    /// write skip markers to the source file when corruption is encountered (see
+    /// <see cref="ReadAll"/>), but the record data is not otherwise modified until the swap.
     /// </para>
     /// <para>
     /// <b>Exclusive access required:</b> No other processes or instances may have the journal
