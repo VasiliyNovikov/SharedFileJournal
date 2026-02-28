@@ -254,6 +254,7 @@ public sealed class SharedJournal : IDisposable
                 yield break;
 
             var header = MemoryMarshal.Read<RecordHeader>(headerBuf);
+            var originalSlotValue = RecordHeader.MagicAndPayloadLength(ref header);
 
             if (header.IsSkip())
             {
@@ -268,7 +269,7 @@ public sealed class SharedJournal : IDisposable
 
             if (!header.IsValid() || header.PayloadLength > _maxPayloadLength)
             {
-                SkipCorruptedRegion(ref offset, tail);
+                SkipCorruptedRegion(ref offset, tail, originalSlotValue);
                 continue;
             }
 
@@ -280,13 +281,13 @@ public sealed class SharedJournal : IDisposable
             if (header.PayloadLength > 0 &&
                 RandomAccess.Read(_fileHandle, payloadBuf, offset + JournalFormat.RecordHeaderSize) < header.PayloadLength)
             {
-                SkipCorruptedRegion(ref offset, tail);
+                SkipCorruptedRegion(ref offset, tail, originalSlotValue);
                 continue;
             }
 
             if (JournalFormat.ComputeChecksum(payloadBuf) != header.Checksum)
             {
-                SkipCorruptedRegion(ref offset, tail);
+                SkipCorruptedRegion(ref offset, tail, originalSlotValue);
                 continue;
             }
 
@@ -295,11 +296,13 @@ public sealed class SharedJournal : IDisposable
         }
     }
 
-    private void SkipCorruptedRegion(ref long offset, long tail)
+    private void SkipCorruptedRegion(ref long offset, long tail, long originalSlotValue)
     {
-        var nextOffset = ScanForNextMagic(offset + 1, tail);
+        var maxGap = int.MaxValue - JournalFormat.RecordAlignment;
+        var scanLimit = (long)Math.Min((ulong)tail, (ulong)offset + (ulong)maxGap);
+        var nextOffset = ScanForNextMagic(offset + 1, scanLimit);
         if (nextOffset > offset && nextOffset < tail)
-            TryWriteSkipMarker(offset, nextOffset);
+            TryWriteSkipMarker(offset, nextOffset, originalSlotValue);
         offset = nextOffset;
     }
 
@@ -307,15 +310,16 @@ public sealed class SharedJournal : IDisposable
     /// Attempts to atomically write a skip marker at <paramref name="gapStart"/> covering
     /// the gap up to <paramref name="gapEnd"/>. Uses an 8-byte CAS (magic + PayloadLength)
     /// via a temporary memory-mapped view to avoid overwriting a concurrent writer's record.
+    /// The caller must ensure the gap fits in a single skip marker (at most ~2 GB).
     /// </summary>
-    private void TryWriteSkipMarker(long gapStart, long gapEnd)
+    private void TryWriteSkipMarker(long gapStart, long gapEnd, long originalSlotValue)
     {
         if (gapStart + JournalFormat.RecordHeaderSize > RandomAccess.GetLength(_fileHandle))
             return;
 
         using var view = new MemoryMappedView<RecordHeader>(_fileHandle, gapStart);
         var skipHeader = RecordHeader.CreateSkip((int)(gapEnd - gapStart) - JournalFormat.RecordHeaderSize);
-        Interlocked.CompareExchange(ref RecordHeader.MagicAndPayloadLength(ref view.Value), RecordHeader.MagicAndPayloadLength(ref skipHeader), 0);
+        Interlocked.CompareExchange(ref RecordHeader.MagicAndPayloadLength(ref view.Value), RecordHeader.MagicAndPayloadLength(ref skipHeader), originalSlotValue);
     }
 
     /// <summary>

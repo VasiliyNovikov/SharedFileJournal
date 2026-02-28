@@ -218,7 +218,7 @@ public class SkipMarkerTests
     }
 
     [TestMethod]
-    public void ReadAll_GapWithNonZeroGarbage_NoSkipMarkerWritten()
+    public void ReadAll_GapWithNonZeroGarbage_SkipMarkerWritten()
     {
         long gapOffset;
         using (var journal = new SharedJournal(JournalPath))
@@ -236,14 +236,14 @@ public class SkipMarkerTests
             fs.Write([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x00, 0x00]);
         }
 
-        // Read — CAS should fail because magic is non-zero
+        // Read — CAS uses current value as comparand, so it succeeds even for non-zero data
         using (var journal = new SharedJournal(JournalPath))
         {
             var records = journal.ReadAll().ToList();
             Assert.AreEqual(2, records.Count);
         }
 
-        // Verify no skip marker was written (CAS failed: first 8 bytes were non-zero)
+        // Verify skip marker was written over the non-zero garbage
         var headerBuf = new byte[JournalFormat.RecordHeaderSize];
         using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
         {
@@ -252,7 +252,7 @@ public class SkipMarkerTests
         }
 
         var header = MemoryMarshal.Read<RecordHeader>(headerBuf);
-        Assert.IsFalse(header.IsSkip(), "Skip marker should not be written when gap has non-zero data.");
+        Assert.IsTrue(header.IsSkip(), "Skip marker should be written over non-zero garbage.");
     }
 
     [TestMethod]
