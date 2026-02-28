@@ -365,4 +365,83 @@ public class SharedJournalTests
         var options = new SharedJournalOptions { MaxPayloadLength = maxValid };
         using var journal = new SharedJournal(JournalPath, options);
     }
+
+    [TestMethod]
+    public void Open_CorruptedNextWriteOffset_Zero_Throws()
+    {
+        using (var journal = new SharedJournal(JournalPath))
+            journal.Append("data"u8);
+
+        CorruptNextWriteOffset(JournalPath, 0L);
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => new SharedJournal(JournalPath));
+    }
+
+    [TestMethod]
+    public void Open_CorruptedNextWriteOffset_BelowDataStart_Throws()
+    {
+        using (var journal = new SharedJournal(JournalPath))
+            journal.Append("data"u8);
+
+        CorruptNextWriteOffset(JournalPath, 128L);
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => new SharedJournal(JournalPath));
+    }
+
+    [TestMethod]
+    public void Open_CorruptedNextWriteOffset_Misaligned_Throws()
+    {
+        using (var journal = new SharedJournal(JournalPath))
+            journal.Append("data"u8);
+
+        CorruptNextWriteOffset(JournalPath, JournalFormat.DataStartOffset + 7);
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => new SharedJournal(JournalPath));
+    }
+
+    [TestMethod]
+    public void Open_CorruptedNextWriteOffset_Negative_Throws()
+    {
+        using (var journal = new SharedJournal(JournalPath))
+            journal.Append("data"u8);
+
+        CorruptNextWriteOffset(JournalPath, -1L);
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => new SharedJournal(JournalPath));
+    }
+
+    [TestMethod]
+    [Timeout(10_000)]
+    public void Open_CrashRecovery_CorruptedNextWriteOffset_Throws()
+    {
+        // Simulate a crash that wrote Magic but never wrote Version,
+        // and NextWriteOffset was left at an invalid non-zero value.
+        using (var fs = new FileStream(JournalPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.ReadWrite))
+        {
+            fs.SetLength(JournalFormat.MetadataFileSize);
+
+            // Write valid Magic at offset 0
+            Span<byte> magic = stackalloc byte[sizeof(ulong)];
+            BitConverter.TryWriteBytes(magic, JournalFormat.MetadataMagic);
+            fs.Write(magic);
+
+            // Leave Version as 0 (crash scenario)
+            // Write invalid NextWriteOffset (100) at offset 64
+            fs.Seek(64, SeekOrigin.Begin);
+            Span<byte> offset = stackalloc byte[sizeof(long)];
+            BitConverter.TryWriteBytes(offset, 100L);
+            fs.Write(offset);
+        }
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => new SharedJournal(JournalPath));
+    }
+
+    private static void CorruptNextWriteOffset(string path, long corruptValue)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        fs.Seek(64, SeekOrigin.Begin);
+        Span<byte> buf = stackalloc byte[sizeof(long)];
+        BitConverter.TryWriteBytes(buf, corruptValue);
+        fs.Write(buf);
+    }
 }

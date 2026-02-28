@@ -233,6 +233,7 @@ public sealed class SharedJournal : IDisposable
                         throw new InvalidOperationException("Invalid journal metadata file: wrong magic.");
 
                     Interlocked.CompareExchange(ref meta.NextWriteOffset, JournalFormat.DataStartOffset, 0);
+                    ValidateNextWriteOffset(Volatile.Read(ref meta.NextWriteOffset));
                     Volatile.Write(ref meta.Version, JournalFormat.MetadataVersion);
                     return;
                 }
@@ -244,7 +245,17 @@ public sealed class SharedJournal : IDisposable
             var version = Volatile.Read(ref meta.Version);
             if (version != JournalFormat.MetadataVersion)
                 throw new InvalidOperationException($"Unsupported journal version: {version}");
+
+            ValidateNextWriteOffset(Volatile.Read(ref meta.NextWriteOffset));
         }
+    }
+
+    private static void ValidateNextWriteOffset(long nextWriteOffset)
+    {
+        if (nextWriteOffset < JournalFormat.DataStartOffset || nextWriteOffset % JournalFormat.RecordAlignment != 0)
+            throw new InvalidOperationException(
+                $"Corrupted journal metadata: NextWriteOffset ({nextWriteOffset}) is invalid. " +
+                $"Must be >= {JournalFormat.DataStartOffset} and aligned to {JournalFormat.RecordAlignment}.");
     }
 
     private long ReserveSpace(int totalLength) =>
