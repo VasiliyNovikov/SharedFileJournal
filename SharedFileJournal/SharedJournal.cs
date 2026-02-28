@@ -64,6 +64,8 @@ public sealed class SharedJournal : IDisposable
         ArgumentNullException.ThrowIfNull(path);
 
         var opts = options ?? SharedJournalOptions.Default;
+        ArgumentOutOfRangeException.ThrowIfLessThan(opts.MaxPayloadLength, 1, nameof(SharedJournalOptions.MaxPayloadLength));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(opts.MaxPayloadLength, int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment, nameof(SharedJournalOptions.MaxPayloadLength));
         _maxPayloadLength = opts.MaxPayloadLength;
 
         var fileOptions = opts.FlushMode == FlushMode.None

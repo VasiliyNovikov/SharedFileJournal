@@ -336,4 +336,33 @@ public class SharedJournalTests
         var oversized = new byte[65];
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => journal.Append(oversized));
     }
+
+    [TestMethod]
+    public void Constructor_ZeroMaxPayloadLength_Throws()
+    {
+        var options = new SharedJournalOptions { MaxPayloadLength = 0 };
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new SharedJournal(JournalPath, options));
+    }
+
+    [TestMethod]
+    public void Constructor_NegativeMaxPayloadLength_Throws()
+    {
+        var options = new SharedJournalOptions { MaxPayloadLength = -1 };
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new SharedJournal(JournalPath, options));
+    }
+
+    [TestMethod]
+    public void Constructor_ExcessiveMaxPayloadLength_Throws()
+    {
+        var options = new SharedJournalOptions { MaxPayloadLength = int.MaxValue };
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new SharedJournal(JournalPath, options));
+    }
+
+    [TestMethod]
+    public void Constructor_MaxValidMaxPayloadLength_DoesNotThrow()
+    {
+        var maxValid = int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment;
+        var options = new SharedJournalOptions { MaxPayloadLength = maxValid };
+        using var journal = new SharedJournal(JournalPath, options);
+    }
 }
