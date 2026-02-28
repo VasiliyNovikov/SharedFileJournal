@@ -163,16 +163,24 @@ public sealed class SharedJournal : IDisposable
     /// </para>
     /// </remarks>
     /// <param name="path">Path to the journal file to compact.</param>
-    public static void Compact(string path)
+    /// <param name="options">
+    /// Optional configuration. If the journal was written with a non-default
+    /// <see cref="SharedJournalOptions.MaxPayloadLength"/>, the same value should be passed here;
+    /// otherwise records exceeding the default limit will be silently treated as corrupted and
+    /// dropped during the read pass. Uses defaults if <c>null</c>.
+    /// </param>
+    public static void Compact(string path, SharedJournalOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(path);
 
         var tempPath = path + ".compact";
         File.Delete(tempPath);
 
-        var exclusiveOptions = new SharedJournalOptions { FileShare = FileShare.None };
-        using (var source = new SharedJournal(path, exclusiveOptions))
-        using (var temp = new SharedJournal(tempPath))
+        var maxPayloadLength = (options ?? SharedJournalOptions.Default).MaxPayloadLength;
+        var sourceOptions = new SharedJournalOptions { FileShare = FileShare.None, MaxPayloadLength = maxPayloadLength };
+        var tempOptions = new SharedJournalOptions { MaxPayloadLength = maxPayloadLength };
+        using (var source = new SharedJournal(path, sourceOptions))
+        using (var temp = new SharedJournal(tempPath, tempOptions))
         {
             foreach (var record in source.ReadAll())
                 temp.Append(record.Payload.Span);

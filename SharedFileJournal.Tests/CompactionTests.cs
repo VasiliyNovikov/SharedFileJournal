@@ -308,6 +308,29 @@ public class CompactionTests
     }
 
     [TestMethod]
+    public void Compact_WithMaxPayloadLength_RespectsLimit()
+    {
+        // Write records with default options (128 MB limit)
+        using (var journal = new SharedJournal(JournalPath))
+        {
+            journal.Append(new byte[50]);
+            journal.Append(new byte[200]);
+            journal.Append(new byte[50]);
+        }
+
+        // Compact with a smaller MaxPayloadLength — the 200-byte record is treated as oversized
+        SharedJournal.Compact(JournalPath, new SharedJournalOptions { MaxPayloadLength = 100 });
+
+        using (var journal = new SharedJournal(JournalPath))
+        {
+            var records = journal.ReadAll().ToList();
+            Assert.AreEqual(2, records.Count);
+            CollectionAssert.AreEqual(new byte[50], records[0].Payload.ToArray());
+            CollectionAssert.AreEqual(new byte[50], records[1].Payload.ToArray());
+        }
+    }
+
+    [TestMethod]
     public void Compact_WhileJournalOpen_ThrowsIOException()
     {
         using var journal = new SharedJournal(JournalPath);
