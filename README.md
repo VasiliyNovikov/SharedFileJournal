@@ -39,6 +39,11 @@ a memory-mapped pointer. Skip markers have the same 16-byte header layout with m
 and `PayloadLength` set to the gap body size. Future readers see the skip marker and jump
 over the gap in O(1) instead of re-scanning.
 
+## Specification
+
+See [SPEC.md](SPEC.md) for the full file format specification, including byte-level header
+layouts, the read/write algorithms, corruption recovery, and the concurrency model.
+
 ## Quick Start
 
 ```csharp

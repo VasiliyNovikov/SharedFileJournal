@@ -26,6 +26,13 @@ dotnet test --filter 'FullyQualifiedName~ClassName.MethodName'
 - **Strict mode**: `TreatWarningsAsErrors`, `AnalysisMode=Recommended`, `EnforceCodeStyleInBuild`, `Nullable=enable`
 - Central package versioning via `Directory.Packages.props`
 
+## Specification
+
+`SPEC.md` contains the full file format specification: byte-level header layouts, read/write
+algorithms, corruption recovery, and concurrency model. **Any change to the file format,
+record layout, metadata header, read/write algorithms, or concurrency logic must be reflected
+in `SPEC.md` to keep the spec and implementation in sync.**
+
 ## Architecture
 
 SharedFileJournal uses a single file per journal:
