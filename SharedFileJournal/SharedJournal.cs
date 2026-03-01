@@ -371,7 +371,7 @@ public sealed class SharedJournal : IDisposable
             return new RecordReadResult(RecordStatus.Incomplete);
 
         if (offset + totalLength > tail)
-            return new RecordReadResult(RecordStatus.Truncated);
+            return new RecordReadResult(RecordStatus.Incomplete);
 
         var payloadMem = readBuf.Read(offset + JournalFormat.RecordHeaderSize, header.PayloadLength);
         if (payloadMem.IsEmpty && header.PayloadLength > 0)

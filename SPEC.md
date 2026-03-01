@@ -336,7 +336,8 @@ corruption.
           skip corrupted region (section 6.3)
           continue
       if record extends beyond tail:
-          stop (incomplete trailing record)
+          skip corrupted region (section 6.3)
+          continue
       read payload into payloadBuf (grow if needed)
       if checksum mismatch:
           skip corrupted region (section 6.3)
@@ -502,6 +503,44 @@ after the value was captured.
 completing the payload, the partially-written record will not receive a
 skip marker. Subsequent reads must re-scan past it each time. Compaction
 (section 7) eliminates these regions.
+
+### 6.7 False Magic in Payloads
+
+Record payloads are arbitrary byte sequences and may contain the 4-byte
+pattern `0x524A4653` (`RecordHeaderMagic`) or `0x534A4653` (`SkipHeaderMagic`).
+During **normal sequential reading** this is harmless — the reader advances
+by the validated record size and never interprets payload bytes as headers.
+
+During **corruption recovery** (section 6.3), however, `ScanForNextMagic`
+examines every 16-byte-aligned position for magic patterns. Because payloads
+start at `record_start + 16` (also 16-byte aligned), a magic pattern at a
+16-byte-aligned offset within a payload will produce a **false positive**.
+
+When the reader resumes at a false-positive offset it calls `ValidateRecord`,
+which reinterprets the payload bytes as a record header:
+
+```
+  Corrupted region             Payload of a valid record
+  ┌────────────────┐ ┌─────────┬──────────────────────────────┐
+  │ gap / garbage  │ │ header  │ ... SFJR xx xx xx xx ...     │
+  └────────────────┘ └─────────┴──────┬───────────────────────┘
+                                      ▲
+                          false magic hit (16-byte aligned)
+```
+
+**Outcomes at the false-positive offset:**
+
+| Interpreted PayloadLength            | Status returned | Effect                            |
+|--------------------------------------|-----------------|-----------------------------------|
+| `> MaxPayloadLength`                 | `Incomplete`    | Re-scans forward — **safe**       |
+| Valid, checksum mismatch (≈ 1/2⁶⁴)   | `Incomplete`    | Re-scans forward — **safe**       |
+| Valid, `offset + totalLength > tail` | `Incomplete`    | Re-scans forward — **safe**       |
+
+All false-positive outcomes result in `Incomplete`, which triggers a forward
+scan to the next candidate. The reader never stops prematurely due to a
+false magic match. In normal operation the extends-past-tail check is
+unreachable — a legitimately reserved record always fits within the snapshot
+`tail` because `Interlocked.Add` updates `NextWriteOffset` atomically.
 
 ---
 

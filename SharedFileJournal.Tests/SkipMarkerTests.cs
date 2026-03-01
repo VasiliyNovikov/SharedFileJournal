@@ -368,4 +368,42 @@ public class SkipMarkerTests
             Assert.AreEqual(expectedSecondOffset, records[1].Offset);
         }
     }
+
+    [TestMethod]
+    public void ReadAll_FalseMagicInPayload_DoesNotStopReading()
+    {
+        // Craft a payload whose first bytes look like a record header with a
+        // PayloadLength that extends past the journal tail. During corruption
+        // recovery, the scanner may land on this false magic; the reader must
+        // continue scanning — not stop prematurely.
+        var payload = new byte[16];
+        MemoryMarshal.Write(payload, JournalFormat.RecordHeaderMagic);
+        MemoryMarshal.Write(payload.AsSpan(4), 100); // interpreted PayloadLength → extends past tail
+
+        long corruptOffset;
+        using (var journal = new SharedJournal(JournalPath))
+        {
+            journal.Append("before"u8);
+            var r = journal.Append(payload);
+            corruptOffset = r.Offset;
+            journal.Append("after"u8);
+        }
+
+        // Zero the crafted record's header — forces corruption recovery scan
+        // which will encounter the false magic in the (now orphaned) payload
+        using (var fs = new FileStream(JournalPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+        {
+            fs.Seek(corruptOffset, SeekOrigin.Begin);
+            fs.Write(new byte[JournalFormat.RecordHeaderSize]);
+        }
+
+        using (var journal = new SharedJournal(JournalPath))
+        {
+            var records = journal.ReadAll().ToOwnedList();
+            Assert.AreEqual(2, records.Count,
+                "Reader must not stop at the false magic — both surrounding records should be returned.");
+            CollectionAssert.AreEqual("before"u8.ToArray(), records[0].Payload.ToArray());
+            CollectionAssert.AreEqual("after"u8.ToArray(), records[1].Payload.ToArray());
+        }
+    }
 }
