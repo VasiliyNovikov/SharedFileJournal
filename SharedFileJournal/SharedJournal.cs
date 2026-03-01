@@ -58,6 +58,7 @@ public sealed class SharedJournal : IDisposable
     private readonly SafeFileHandle _fileHandle;
     private readonly MemoryMappedView<MetadataHeader> _metaView;
     private readonly int _maxPayloadLength;
+    private readonly int _readAheadSize;
     private int _disposed;
 
     /// <summary>
@@ -75,6 +76,8 @@ public sealed class SharedJournal : IDisposable
         ArgumentOutOfRangeException.ThrowIfLessThan(opts.MaxPayloadLength, 1, nameof(SharedJournalOptions.MaxPayloadLength));
         ArgumentOutOfRangeException.ThrowIfGreaterThan(opts.MaxPayloadLength, int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment, nameof(SharedJournalOptions.MaxPayloadLength));
         _maxPayloadLength = opts.MaxPayloadLength;
+        ArgumentOutOfRangeException.ThrowIfLessThan(opts.ReadAheadSize, 1, nameof(SharedJournalOptions.ReadAheadSize));
+        _readAheadSize = opts.ReadAheadSize;
 
         try
         {
@@ -309,7 +312,7 @@ public sealed class SharedJournal : IDisposable
     {
         var tail = GetNextWriteOffset();
         long offset = JournalFormat.DataStartOffset;
-        using var readBuf = new FileReadBuffer(_fileHandle, 64 * 1024);
+        using var readBuf = new FileReadBuffer(_fileHandle, _readAheadSize);
 
         while (offset + JournalFormat.MinRecordSize <= tail)
         {
