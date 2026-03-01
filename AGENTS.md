@@ -41,7 +41,7 @@ SharedFileJournal uses a single file per journal:
 
 ### Core types
 - `SharedJournal` — Main entry point (Append/ReadAll/Compact/Dispose). Compact is static and requires exclusive file access.
-- `JournalFormat` (internal) — Record serialization, header/trailer layout, FNV-1a checksum
+- `JournalFormat` (internal) — Record serialization, header/trailer layout, xxHash3 checksum
 - `SharedJournalOptions` / `FlushMode` — Configuration
 
 ### Concurrency model

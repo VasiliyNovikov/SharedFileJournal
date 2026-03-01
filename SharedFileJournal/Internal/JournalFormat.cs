@@ -1,4 +1,5 @@
 using System;
+using System.IO.Hashing;
 using System.Runtime.InteropServices;
 
 namespace SharedFileJournal.Internal;
@@ -11,7 +12,7 @@ internal static unsafe class JournalFormat
     // Metadata constants
     // "SFJMETA\0" as little-endian uint64
     public const ulong MetadataMagic = 0x004154454D4A4653;
-    public const uint MetadataVersion = 1;
+    public const uint MetadataVersion = 2;
     public const int MetadataFileSize = 4096;
 
     /// <summary>
@@ -50,19 +51,7 @@ internal static unsafe class JournalFormat
     }
 
     /// <summary>
-    /// Computes an FNV-1a 64-bit checksum over the given data.
+    /// Computes an xxHash3 64-bit checksum over the given data (SIMD-accelerated).
     /// </summary>
-    public static ulong ComputeChecksum(ReadOnlySpan<byte> data)
-    {
-        const ulong offsetBasis = 14695981039346656037;
-        const ulong prime = 1099511628211;
-
-        var hash = offsetBasis;
-        foreach (var b in data)
-        {
-            hash ^= b;
-            hash *= prime;
-        }
-        return hash;
-    }
+    public static ulong ComputeChecksum(ReadOnlySpan<byte> data) => XxHash3.HashToUInt64(data);
 }

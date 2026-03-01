@@ -47,7 +47,7 @@ bytes carry structured fields; the remainder is reserved padding. The entire
 | 0         | 8    | Magic          | 0x004154454D4A4653                 |
 |           |      |                | ("SFJMETA\0" in little-endian)     |
 +-----------+------+----------------+------------------------------------+
-| 8         | 4    | Version        | Format version (currently 1)       |
+| 8         | 4    | Version        | Format version (currently 2)       |
 +-----------+------+----------------+------------------------------------+
 | 12        | 52   | _reserved      | Zero-filled padding                |
 +-----------+------+----------------+------------------------------------+
@@ -60,9 +60,9 @@ bytes carry structured fields; the remainder is reserved padding. The entire
  0                   8           12                                  64          72
  +-------------------+-----------+-----------------------------------+-----------+
  |      Magic        |  Version  |          _reserved (52 B)         | NextWrite |
- | 0x004154454D4A4653|     1     |         (all zeros)               |  Offset   |
+ | 0x004154454D4A4653|     2     |         (all zeros)               |  Offset   |
  +-------------------+-----------+-----------------------------------+-----------+
- |<--- 8 bytes ----->|<- 4 B --->|<------------ 52 bytes ---------->|<- 8 B --->|
+ |<--- 8 bytes ----->|<- 4 B --->|<------------ 52 bytes ----------->|<- 8 B --->|
 ```
 
 **Field details:**
@@ -100,7 +100,7 @@ Every record is aligned to a **16-byte boundary** (`RecordAlignment`).
 +-----------+------+----------------+------------------------------------+
 | 4         | 4    | PayloadLength  | Payload size in bytes (signed int) |
 +-----------+------+----------------+------------------------------------+
-| 8         | 8    | Checksum       | FNV-1a 64-bit hash of the payload  |
+| 8         | 8    | Checksum       | xxHash3 64-bit hash of the payload |
 +-----------+------+----------------+------------------------------------+
 ```
 
@@ -110,7 +110,7 @@ Every record is aligned to a **16-byte boundary** (`RecordAlignment`).
  |   Magic   | PayloadLength |          Checksum            |
  |  "SFJR"   |   (4 bytes)   |         (8 bytes)            |
  +-----------+---------------+------------------------------+
- |<- 4 B --->|<--- 4 B ---->|<---------- 8 B ------------->|
+ |<- 4 B --->|<---- 4 B ---->|<---------- 8 B ------------->|
 ```
 
 ### 3.2 Complete Record Layout
@@ -165,15 +165,9 @@ A skip header is **valid** when:
 
 ### 3.5 Checksum Algorithm
 
-FNV-1a 64-bit over the payload bytes:
-
-```
-hash = 14695981039346656037  (FNV offset basis)
-for each byte b in payload:
-    hash = hash XOR b
-    hash = hash * 1099511628211  (FNV prime)
-return hash
-```
+xxHash3 64-bit over the payload bytes, using the default seed (0).
+The implementation uses `System.IO.Hashing.XxHash3.HashToUInt64()`,
+which is SIMD-accelerated (AVX2/SSE2/NEON) for large payloads.
 
 The checksum covers only the payload, not the header.
 
@@ -183,7 +177,7 @@ The checksum covers only the payload, not the header.
  Offset   Content
 +--------+------------------------------------------------------------+
 | 0      | Metadata Header (4096 bytes)                               |
-|        |   Magic=0x004154454D4A4653  Version=1  NextWriteOffset=4144|
+|        |   Magic=0x004154454D4A4653  Version=2  NextWriteOffset=4144|
 +--------+------------------------------------------------------------+
 | 4096   | Record 0: Header(SFJR, len=5, checksum) + "hello" + 11 pad|
 |        |   total aligned size = align16(16+5) = 32 bytes            |
@@ -211,7 +205,7 @@ the same file concurrently.
   CAS(Magic, 0 -> SFJMETA) ──────>  Magic = SFJMETA
   Volatile.Write(NextWriteOffset,    NextWriteOffset = 4096
                  4096) ───────────>
-  Volatile.Write(Version, 1) ─────>  Version = 1
+  Volatile.Write(Version, 2) ─────>  Version = 2
 ```
 
 The initializer writes `NextWriteOffset` **before** `Version`. This ensures
@@ -224,9 +218,9 @@ when the spin completes.
   Process B                          File (memory-mapped)
   ─────────                          ────────────────────
   CAS(Magic, 0 -> SFJMETA)          returns SFJMETA (lost race)
-  spin while Version == 0 ◄──────── Version = 1 (eventually visible)
+  spin while Version == 0 ◄──────── Version = 2 (eventually visible)
   validate Magic == SFJMETA
-  validate Version == 1
+  validate Version == 2
   validate NextWriteOffset >= 4096
           and aligned to 16
 ```
@@ -245,7 +239,7 @@ initialization:
   CAS(NextWriteOffset, 0 -> 4096)   NextWriteOffset = 4096 (if was 0)
   validate NextWriteOffset >= 4096
           and aligned to 16
-  Volatile.Write(Version, 1) ─────>  Version = 1
+  Volatile.Write(Version, 2) ─────>  Version = 2
 ```
 
 The CAS on `NextWriteOffset` only succeeds if it is still 0 (the initializer
@@ -645,7 +639,7 @@ lock:
   CAS(Magic, 0->SFJMETA) = 0      CAS(Magic, 0->SFJMETA) = SFJMETA
   (won: Magic was 0)               (lost: Magic already set)
   Write NextWriteOffset = 4096     Spin on Version == 0...
-  Write Version = 1 ─────────────> Version becomes visible
+  Write Version = 2 ─────────────> Version becomes visible
                                    Validate Magic, Version,
                                    NextWriteOffset
                                    Proceed
@@ -706,7 +700,7 @@ between normal journal instances and the `Compact` operation.
 | Constant            | Value                | Description                     |
 |---------------------|----------------------|---------------------------------|
 | `MetadataMagic`     | `0x004154454D4A4653` | "SFJMETA\0" (little-endian)     |
-| `MetadataVersion`   | `1`                  | Current format version          |
+| `MetadataVersion`   | `2`                  | Current format version          |
 | `MetadataFileSize`  | `4096`               | Metadata region size            |
 | `DataStartOffset`   | `4096`               | First record offset             |
 | `RecordHeaderMagic` | `0x524A4653`         | "SFJR" (little-endian)          |
