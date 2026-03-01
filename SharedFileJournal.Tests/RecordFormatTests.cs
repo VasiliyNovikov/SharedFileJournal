@@ -20,7 +20,7 @@ public class RecordFormatTests
         JournalFormat.WriteRecord(buffer, payload);
 
         var header = MemoryMarshal.Read<RecordHeader>(buffer);
-        Assert.IsTrue(header.IsValid());
+        Assert.AreEqual(RecordStatus.Record, header.Validate());
         Assert.AreEqual(payload.Length, header.PayloadLength);
         Assert.AreEqual(JournalFormat.ComputeChecksum(payload), header.Checksum);
     }
@@ -30,7 +30,7 @@ public class RecordFormatTests
     {
         var buffer = new byte[JournalFormat.RecordHeaderSize];
         var header = MemoryMarshal.Read<RecordHeader>(buffer);
-        Assert.IsFalse(header.IsValid());
+        Assert.AreEqual(RecordStatus.Corrupt, header.Validate());
     }
 
     [TestMethod]
@@ -57,7 +57,7 @@ public class RecordFormatTests
         JournalFormat.WriteRecord(buffer, ReadOnlySpan<byte>.Empty);
 
         var header = MemoryMarshal.Read<RecordHeader>(buffer);
-        Assert.IsTrue(header.IsValid());
+        Assert.AreEqual(RecordStatus.Record, header.Validate());
         Assert.AreEqual(0, header.PayloadLength);
     }
 

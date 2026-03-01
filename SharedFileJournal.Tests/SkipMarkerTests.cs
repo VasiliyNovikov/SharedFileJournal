@@ -65,7 +65,7 @@ public class SkipMarkerTests
         }
 
         var header = MemoryMarshal.Read<RecordHeader>(headerBuf);
-        Assert.IsTrue(header.IsSkip(), "A skip marker should be written at the gap offset.");
+        Assert.AreEqual(RecordStatus.Skip, header.Validate(), "A skip marker should be written at the gap offset.");
         Assert.IsTrue(header.PayloadLength > 0, "Skip marker should have a positive PayloadLength.");
     }
 
@@ -209,11 +209,11 @@ public class SkipMarkerTests
         {
             fs.Seek(gap1Offset, SeekOrigin.Begin);
             fs.ReadExactly(headerBuf);
-            Assert.IsTrue(MemoryMarshal.Read<RecordHeader>(headerBuf).IsSkip(), "First gap should have skip marker.");
+            Assert.AreEqual(RecordStatus.Skip, MemoryMarshal.Read<RecordHeader>(headerBuf).Validate(), "First gap should have skip marker.");
 
             fs.Seek(gap2Offset, SeekOrigin.Begin);
             fs.ReadExactly(headerBuf);
-            Assert.IsTrue(MemoryMarshal.Read<RecordHeader>(headerBuf).IsSkip(), "Second gap should have skip marker.");
+            Assert.AreEqual(RecordStatus.Skip, MemoryMarshal.Read<RecordHeader>(headerBuf).Validate(), "Second gap should have skip marker.");
         }
     }
 
@@ -252,7 +252,7 @@ public class SkipMarkerTests
         }
 
         var header = MemoryMarshal.Read<RecordHeader>(headerBuf);
-        Assert.IsTrue(header.IsSkip(), "Skip marker should be written over non-zero garbage.");
+        Assert.AreEqual(RecordStatus.Skip, header.Validate(), "Skip marker should be written over non-zero garbage.");
     }
 
     [TestMethod]

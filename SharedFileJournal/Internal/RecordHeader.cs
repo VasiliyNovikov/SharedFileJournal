@@ -34,13 +34,21 @@ internal struct RecordHeader
         Checksum = 0
     };
 
-    public readonly bool IsValid() =>
-        Magic == JournalFormat.RecordHeaderMagic &&
-        PayloadLength >= 0 &&
-        PayloadLength <= int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment;
-
-    public readonly bool IsSkip() =>
-        Magic == JournalFormat.SkipHeaderMagic &&
-        PayloadLength >= 0 &&
-        PayloadLength <= int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment;
+    /// <summary>
+    /// Validates the header fields (magic and payload-length bounds).
+    /// Returns <see cref="RecordStatus.Record"/>, <see cref="RecordStatus.Skip"/>,
+    /// <see cref="RecordStatus.Incomplete"/> (recognized magic but invalid bounds),
+    /// or <see cref="RecordStatus.Corrupt"/> (unrecognized magic).
+    /// </summary>
+    public readonly RecordStatus Validate()
+    {
+        var validBounds = PayloadLength >= 0 &&
+            PayloadLength <= int.MaxValue - JournalFormat.RecordHeaderSize - JournalFormat.RecordAlignment;
+        return Magic switch
+        {
+            JournalFormat.RecordHeaderMagic => validBounds ? RecordStatus.Record : RecordStatus.Incomplete,
+            JournalFormat.SkipHeaderMagic => validBounds ? RecordStatus.Skip : RecordStatus.Incomplete,
+            _ => RecordStatus.Corrupt
+        };
+    }
 }

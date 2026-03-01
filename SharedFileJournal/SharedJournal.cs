@@ -304,72 +304,76 @@ public sealed class SharedJournal : IDisposable
 
         while (offset + JournalFormat.MinRecordSize <= tail)
         {
-            if (RandomAccess.Read(_fileHandle, headerBuf, offset) < JournalFormat.RecordHeaderSize)
-                yield break;
-
-            var header = MemoryMarshal.Read<RecordHeader>(headerBuf);
-            var originalSlotValue = RecordHeader.MagicAndPayloadLength(ref header);
-
-            if (header.IsSkip())
+            var result = ValidateRecord(headerBuf, offset, tail, out var originalSlotValue);
+            switch (result.Status)
             {
-                var skipLength = JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + header.PayloadLength);
-                if (offset + skipLength <= tail)
-                {
-                    offset += skipLength;
-                    continue;
-                }
-                // Corrupted skip marker — fall through to scan
+                case RecordStatus.Record:
+                    yield return new JournalRecord(offset, result.Payload);
+                    offset += result.TotalLength;
+                    break;
+                case RecordStatus.Skip:
+                    offset += result.TotalLength;
+                    break;
+                case RecordStatus.Incomplete:
+                    SkipCorruptedRegion(ref offset, tail);
+                    break;
+                case RecordStatus.Corrupt:
+                    var gapStart = offset;
+                    SkipCorruptedRegion(ref offset, tail);
+                    if (offset > gapStart && offset < tail)
+                        TryWriteSkipMarker(gapStart, offset, originalSlotValue);
+                    break;
+                case RecordStatus.Truncated:
+                    yield break;
             }
-
-            if (!header.IsValid() || header.PayloadLength > _maxPayloadLength)
-            {
-                SkipCorruptedRegion(ref offset, tail, originalSlotValue);
-                continue;
-            }
-
-            var totalRecordLength = JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + header.PayloadLength);
-            if (offset + totalRecordLength > tail)
-                yield break;
-
-            var payloadBuf = new byte[header.PayloadLength];
-            if (header.PayloadLength > 0 &&
-                RandomAccess.Read(_fileHandle, payloadBuf, offset + JournalFormat.RecordHeaderSize) < header.PayloadLength)
-            {
-                SkipCorruptedRegion(ref offset, tail, originalSlotValue);
-                continue;
-            }
-
-            if (JournalFormat.ComputeChecksum(payloadBuf) != header.Checksum)
-            {
-                SkipCorruptedRegion(ref offset, tail, originalSlotValue);
-                continue;
-            }
-
-            yield return new JournalRecord(offset, payloadBuf);
-            offset += totalRecordLength;
         }
     }
 
-    private void SkipCorruptedRegion(ref long offset, long tail, long originalSlotValue)
+    private RecordReadResult ValidateRecord(byte[] headerBuf, long offset, long tail, out long originalSlotValue)
+    {
+        if (RandomAccess.Read(_fileHandle, headerBuf, offset) < JournalFormat.RecordHeaderSize)
+        {
+            originalSlotValue = 0;
+            return new RecordReadResult(RecordStatus.Truncated);
+        }
+
+        var header = MemoryMarshal.Read<RecordHeader>(headerBuf);
+        originalSlotValue = RecordHeader.MagicAndPayloadLength(ref header);
+
+        var status = header.Validate();
+
+        if (status is RecordStatus.Corrupt or RecordStatus.Incomplete)
+            return new RecordReadResult(status);
+
+        var totalLength = JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + header.PayloadLength);
+
+        if (status == RecordStatus.Skip)
+            return offset + totalLength <= tail
+                ? new RecordReadResult(RecordStatus.Skip, totalLength: totalLength)
+                : new RecordReadResult(RecordStatus.Incomplete);
+
+        if (header.PayloadLength > _maxPayloadLength)
+            return new RecordReadResult(RecordStatus.Incomplete);
+
+        if (offset + totalLength > tail)
+            return new RecordReadResult(RecordStatus.Truncated);
+
+        var payloadBuf = new byte[header.PayloadLength];
+        if (header.PayloadLength > 0 &&
+            RandomAccess.Read(_fileHandle, payloadBuf, offset + JournalFormat.RecordHeaderSize) < header.PayloadLength)
+            return new RecordReadResult(RecordStatus.Incomplete);
+
+        if (JournalFormat.ComputeChecksum(payloadBuf) != header.Checksum)
+            return new RecordReadResult(RecordStatus.Incomplete);
+
+        return new RecordReadResult(RecordStatus.Record, payloadBuf, totalLength);
+    }
+
+    private void SkipCorruptedRegion(ref long offset, long tail)
     {
         var maxGap = int.MaxValue - JournalFormat.RecordAlignment;
         var scanLimit = (long)Math.Min((ulong)tail, (ulong)offset + (ulong)maxGap);
-        var nextOffset = ScanForNextMagic(offset + 1, scanLimit);
-        if (nextOffset > offset && nextOffset < tail)
-        {
-            // Only write a skip marker when the observed magic is not a recognized
-            // record or skip magic. If magic == RecordHeaderMagic, a concurrent writer
-            // may have written the header (magic + payload length) but not yet completed
-            // the checksum and payload — the CAS would match the partially-written header
-            // and overwrite it with a skip marker, permanently losing the in-flight record.
-            // For unrecognized magic (zeros, garbage), no writer can be in-flight at this
-            // offset, so the skip marker is safe. If a writer starts after we captured
-            // originalSlotValue, it will write RecordHeaderMagic, making the CAS fail.
-            var observedMagic = (uint)(originalSlotValue & 0xFFFFFFFF);
-            if (observedMagic != JournalFormat.RecordHeaderMagic && observedMagic != JournalFormat.SkipHeaderMagic)
-                TryWriteSkipMarker(offset, nextOffset, originalSlotValue);
-        }
-        offset = nextOffset;
+        offset = ScanForNextMagic(offset + 1, scanLimit);
     }
 
     /// <summary>
