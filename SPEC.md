@@ -331,6 +331,7 @@ corruption.
 ```
   tail = Volatile.Read(NextWriteOffset)     // snapshot
   offset = 4096                             // DataStartOffset
+  payloadBuf = rent from ArrayPool          // reused across records
 
   while offset + MinRecordSize <= tail:
       read header at offset
@@ -342,13 +343,20 @@ corruption.
           continue
       if record extends beyond tail:
           stop (incomplete trailing record)
-      read payload
+      read payload into payloadBuf (grow if needed)
       if checksum mismatch:
           skip corrupted region (section 6.3)
           continue
-      yield record
+      yield record (Payload references payloadBuf)
       advance offset by aligned record size
+
+  return payloadBuf to ArrayPool
 ```
+
+**Payload lifetime:** Each yielded record's `Payload` references a pooled buffer that
+is reused on the next iteration. The payload is only valid until the next `MoveNext`
+call on the enumerator (or until enumeration ends). Callers that need to retain the
+data must copy it before advancing (e.g. via `Payload.ToArray()`).
 
 ### 6.2 Skip Marker Handling
 

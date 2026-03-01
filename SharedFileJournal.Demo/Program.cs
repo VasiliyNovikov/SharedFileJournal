@@ -98,23 +98,8 @@ void Stress()
                       $"({threadCount * recordsPerThread / writeElapsed.TotalSeconds:F0} records/sec)");
 
     sw.Restart();
-    var records = journal.ReadAll().ToList();
-    var readElapsed = sw.Elapsed;
-
-    Console.WriteLine($"Read phase: {readElapsed.TotalMilliseconds:F1}ms " +
-                      $"({records.Count / readElapsed.TotalSeconds:F0} records/sec)");
-
-    var expected = threadCount * recordsPerThread;
-    Console.WriteLine($"Records written: {expected}, read back: {records.Count}");
-
-    if (records.Count != expected)
-    {
-        Console.WriteLine("ERROR: Record count mismatch!");
-        Environment.Exit(1);
-    }
-
-    // Verify all payloads are valid
-    foreach (var record in records)
+    var recordCount = 0;
+    foreach (var record in journal.ReadAll())
     {
         var text = Encoding.UTF8.GetString(record.Payload.Span);
         if (!text.StartsWith('t'))
@@ -122,6 +107,20 @@ void Stress()
             Console.WriteLine($"ERROR: Invalid payload at offset {record.Offset}: {text}");
             Environment.Exit(1);
         }
+        recordCount++;
+    }
+    var readElapsed = sw.Elapsed;
+
+    Console.WriteLine($"Read phase: {readElapsed.TotalMilliseconds:F1}ms " +
+                      $"({recordCount / readElapsed.TotalSeconds:F0} records/sec)");
+
+    var expected = threadCount * recordsPerThread;
+    Console.WriteLine($"Records written: {expected}, read back: {recordCount}");
+
+    if (recordCount != expected)
+    {
+        Console.WriteLine("ERROR: Record count mismatch!");
+        Environment.Exit(1);
     }
 
     // Compaction check

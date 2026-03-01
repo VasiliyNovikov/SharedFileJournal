@@ -145,9 +145,18 @@ public sealed class SharedJournal : IDisposable
     /// incomplete regions and continuing to recover subsequent records.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// <b>Payload lifetime:</b> Each <see cref="JournalRecord.Payload"/> is backed by a
+    /// pooled buffer that is reused across iterations. The payload is only valid until the
+    /// next call to <c>MoveNext</c> on the enumerator (or until enumeration ends). Callers
+    /// that need to retain payload data must copy it before advancing, for example via
+    /// <see cref="ReadOnlyMemory{T}.ToArray"/>.
+    /// </para>
+    /// <para>
     /// When corruption is encountered, the reader scans forward for the next valid record
     /// header and may write skip markers to the journal file so that future reads can
     /// efficiently bypass the corrupted region.
+    /// </para>
     /// </remarks>
     public IEnumerable<JournalRecord> ReadAll()
     {
@@ -301,35 +310,43 @@ public sealed class SharedJournal : IDisposable
         var tail = GetNextWriteOffset();
         long offset = JournalFormat.DataStartOffset;
         var headerBuf = new byte[JournalFormat.RecordHeaderSize];
+        var payloadBuf = ArrayPool<byte>.Shared.Rent(256);
 
-        while (offset + JournalFormat.MinRecordSize <= tail)
+        try
         {
-            var result = ValidateRecord(headerBuf, offset, tail, out var originalSlotValue);
-            switch (result.Status)
+            while (offset + JournalFormat.MinRecordSize <= tail)
             {
-                case RecordStatus.Record:
-                    yield return new JournalRecord(offset, result.Payload);
-                    offset += result.TotalLength;
-                    break;
-                case RecordStatus.Skip:
-                    offset += result.TotalLength;
-                    break;
-                case RecordStatus.Incomplete:
-                    SkipCorruptedRegion(ref offset, tail);
-                    break;
-                case RecordStatus.Corrupt:
-                    var gapStart = offset;
-                    SkipCorruptedRegion(ref offset, tail);
-                    if (offset > gapStart && offset < tail)
-                        TryWriteSkipMarker(gapStart, offset, originalSlotValue);
-                    break;
-                case RecordStatus.Truncated:
-                    yield break;
+                var result = ValidateRecord(headerBuf, ref payloadBuf, offset, tail, out var originalSlotValue);
+                switch (result.Status)
+                {
+                    case RecordStatus.Record:
+                        yield return new JournalRecord(offset, payloadBuf.AsMemory(0, result.PayloadLength));
+                        offset += result.TotalLength;
+                        break;
+                    case RecordStatus.Skip:
+                        offset += result.TotalLength;
+                        break;
+                    case RecordStatus.Incomplete:
+                        SkipCorruptedRegion(ref offset, tail);
+                        break;
+                    case RecordStatus.Corrupt:
+                        var gapStart = offset;
+                        SkipCorruptedRegion(ref offset, tail);
+                        if (offset > gapStart && offset < tail)
+                            TryWriteSkipMarker(gapStart, offset, originalSlotValue);
+                        break;
+                    case RecordStatus.Truncated:
+                        yield break;
+                }
             }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(payloadBuf);
         }
     }
 
-    private RecordReadResult ValidateRecord(byte[] headerBuf, long offset, long tail, out long originalSlotValue)
+    private RecordReadResult ValidateRecord(byte[] headerBuf, ref byte[] payloadBuf, long offset, long tail, out long originalSlotValue)
     {
         if (RandomAccess.Read(_fileHandle, headerBuf, offset) < JournalFormat.RecordHeaderSize)
         {
@@ -358,15 +375,21 @@ public sealed class SharedJournal : IDisposable
         if (offset + totalLength > tail)
             return new RecordReadResult(RecordStatus.Truncated);
 
-        var payloadBuf = new byte[header.PayloadLength];
-        if (header.PayloadLength > 0 &&
-            RandomAccess.Read(_fileHandle, payloadBuf, offset + JournalFormat.RecordHeaderSize) < header.PayloadLength)
+        if (payloadBuf.Length < header.PayloadLength)
+        {
+            // Rent new buffer first to avoid double-return if Rent throws
+            var newBuf = ArrayPool<byte>.Shared.Rent(header.PayloadLength);
+            ArrayPool<byte>.Shared.Return(payloadBuf);
+            payloadBuf = newBuf;
+        }
+
+        var payloadSpan = payloadBuf.AsSpan(0, header.PayloadLength);
+
+        if (RandomAccess.Read(_fileHandle, payloadSpan, offset + JournalFormat.RecordHeaderSize) < header.PayloadLength ||
+            JournalFormat.ComputeChecksum(payloadSpan) != header.Checksum)
             return new RecordReadResult(RecordStatus.Incomplete);
 
-        if (JournalFormat.ComputeChecksum(payloadBuf) != header.Checksum)
-            return new RecordReadResult(RecordStatus.Incomplete);
-
-        return new RecordReadResult(RecordStatus.Record, payloadBuf, totalLength);
+        return new RecordReadResult(RecordStatus.Record, header.PayloadLength, totalLength);
     }
 
     private void SkipCorruptedRegion(ref long offset, long tail)

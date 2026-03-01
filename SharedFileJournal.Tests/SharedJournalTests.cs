@@ -58,7 +58,7 @@ public class SharedJournalTests
         Assert.AreEqual((long)JournalFormat.DataStartOffset, result.Offset);
         Assert.AreEqual(JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + payload.Length), result.TotalRecordLength);
 
-        var records = journal.ReadAll().ToList();
+        var records = journal.ReadAll().ToOwnedList();
         Assert.AreEqual(1, records.Count);
         CollectionAssert.AreEqual(payload, records[0].Payload.ToArray());
     }
@@ -77,7 +77,7 @@ public class SharedJournalTests
         foreach (var p in payloads)
             journal.Append(p);
 
-        var records = journal.ReadAll().ToList();
+        var records = journal.ReadAll().ToOwnedList();
         Assert.AreEqual(3, records.Count);
         for (var i = 0; i < payloads.Length; i++)
             CollectionAssert.AreEqual(payloads[i], records[i].Payload.ToArray());
@@ -89,7 +89,7 @@ public class SharedJournalTests
         using var journal = new SharedJournal(JournalPath);
         journal.Append(ReadOnlySpan<byte>.Empty);
 
-        var records = journal.ReadAll().ToList();
+        var records = journal.ReadAll().ToOwnedList();
         Assert.AreEqual(1, records.Count);
         Assert.AreEqual(0, records[0].Payload.Length);
     }
@@ -103,7 +103,7 @@ public class SharedJournalTests
 
         journal.Append(payload);
 
-        var records = journal.ReadAll().ToList();
+        var records = journal.ReadAll().ToOwnedList();
         Assert.AreEqual(1, records.Count);
         CollectionAssert.AreEqual(payload, records[0].Payload.ToArray());
     }
@@ -112,7 +112,7 @@ public class SharedJournalTests
     public void ReadAll_EmptyJournal_ReturnsEmpty()
     {
         using var journal = new SharedJournal(JournalPath);
-        var records = journal.ReadAll().ToList();
+        var records = journal.ReadAll().ToOwnedList();
         Assert.AreEqual(0, records.Count);
     }
 
@@ -142,7 +142,7 @@ public class SharedJournalTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(1, records.Count);
             CollectionAssert.AreEqual(payload, records[0].Payload.ToArray());
         }
@@ -162,7 +162,7 @@ public class SharedJournalTests
             journal.Append(expected[i]);
         }
 
-        var records = journal.ReadAll().ToList();
+        var records = journal.ReadAll().ToOwnedList();
         Assert.AreEqual(100, records.Count);
         for (var i = 0; i < 100; i++)
             CollectionAssert.AreEqual(expected[i], records[i].Payload.ToArray());
@@ -188,7 +188,7 @@ public class SharedJournalTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             Assert.AreEqual("first", System.Text.Encoding.UTF8.GetString(records[0].Payload.Span));
             Assert.AreEqual("third", System.Text.Encoding.UTF8.GetString(records[1].Payload.Span));
@@ -217,7 +217,7 @@ public class SharedJournalTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             Assert.AreEqual("good1", System.Text.Encoding.UTF8.GetString(records[0].Payload.Span));
             Assert.AreEqual("good2", System.Text.Encoding.UTF8.GetString(records[1].Payload.Span));
@@ -242,7 +242,7 @@ public class SharedJournalTests
         // Open should detect partial init after spin timeout and complete it
         using var journal = new SharedJournal(JournalPath);
         journal.Append("after recovery"u8);
-        var records = journal.ReadAll().ToList();
+        var records = journal.ReadAll().ToOwnedList();
         Assert.AreEqual(1, records.Count);
         Assert.AreEqual("after recovery", Encoding.UTF8.GetString(records[0].Payload.Span));
     }
@@ -287,7 +287,7 @@ public class SharedJournalTests
         journal.Append("data"u8);
         journal.Flush();
 
-        var records = journal.ReadAll().ToList();
+        var records = journal.ReadAll().ToOwnedList();
         Assert.AreEqual(1, records.Count);
     }
 
@@ -328,7 +328,7 @@ public class SharedJournalTests
 
         using (var journal = new SharedJournal(JournalPath, options))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             Assert.AreEqual("first", Encoding.UTF8.GetString(records[0].Payload.Span));
             Assert.AreEqual("third", Encoding.UTF8.GetString(records[1].Payload.Span));
