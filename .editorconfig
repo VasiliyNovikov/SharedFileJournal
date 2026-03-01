@@ -17,6 +17,7 @@ insert_final_newline = false
 dotnet_separate_import_directive_groups = true
 dotnet_sort_system_directives_first = true
 csharp_style_namespace_declarations = file_scoped
+csharp_style_prefer_primary_constructors = true
 
 dotnet_diagnostic.CA1000.severity = none
 dotnet_diagnostic.CA1711.severity = none
@@ -29,6 +30,7 @@ dotnet_diagnostic.IDE0021.severity = none
 dotnet_diagnostic.IDE0022.severity = none
 dotnet_diagnostic.IDE0023.severity = none
 dotnet_diagnostic.IDE0061.severity = none
+dotnet_diagnostic.IDE0290.severity = error
 
 [*{Tests,Benchmarks}.cs]
 dotnet_diagnostic.CA1707.severity = none

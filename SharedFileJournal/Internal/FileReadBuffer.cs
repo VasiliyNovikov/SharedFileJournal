@@ -14,20 +14,11 @@ namespace SharedFileJournal.Internal;
 /// Returned <see cref="ReadOnlyMemory{T}"/> slices reference the internal buffer
 /// and are only valid until the next <see cref="Read"/> call.
 /// </remarks>
-internal sealed class FileReadBuffer : IDisposable
+internal sealed class FileReadBuffer(SafeFileHandle fileHandle, int readAheadSize) : IDisposable
 {
-    private readonly SafeFileHandle _fileHandle;
-    private readonly int _readAheadSize;
-    private byte[] _buffer;
+    private byte[] _buffer = ArrayPool<byte>.Shared.Rent(readAheadSize);
     private long _bufferFileOffset = -1;
     private int _bufferBytesRead;
-
-    public FileReadBuffer(SafeFileHandle fileHandle, int readAheadSize)
-    {
-        _fileHandle = fileHandle;
-        _readAheadSize = readAheadSize;
-        _buffer = ArrayPool<byte>.Shared.Rent(readAheadSize);
-    }
 
     /// <summary>
     /// Reads <paramref name="length"/> bytes starting at file position <paramref name="fileOffset"/>.
@@ -45,7 +36,7 @@ internal sealed class FileReadBuffer : IDisposable
                 _buffer = newBuffer;
             }
             _bufferFileOffset = fileOffset;
-            _bufferBytesRead = RandomAccess.Read(_fileHandle, _buffer.AsSpan(0, Math.Max(length, _readAheadSize)), fileOffset);
+            _bufferBytesRead = RandomAccess.Read(fileHandle, _buffer.AsSpan(0, Math.Max(length, readAheadSize)), fileOffset);
         }
 
         var bufferIndex = (int)(fileOffset - _bufferFileOffset);

@@ -122,7 +122,7 @@ public sealed class SharedJournal : IDisposable
 
         var dataLength = JournalFormat.RecordHeaderSize + payload.Length;
         var alignedLength = JournalFormat.AlignRecordSize(dataLength);
-        var offset = ReserveSpace(alignedLength);
+        var offset = Interlocked.Add(ref _metaView.Value.NextWriteOffset, alignedLength) - alignedLength;
 
         byte[]? rented = null;
         var span = dataLength <= 2048 ? stackalloc byte[dataLength] : (rented = ArrayPool<byte>.Shared.Rent(dataLength));
@@ -216,10 +216,8 @@ public sealed class SharedJournal : IDisposable
 
         File.Delete(tempPath);
 
-        var sourceOptions = new SharedJournalOptions
-            { FileShare = FileShare.None, AcquireLockFile = false, MaxPayloadLength = maxPayloadLength };
-        var tempOptions = new SharedJournalOptions
-            { AcquireLockFile = false, MaxPayloadLength = maxPayloadLength };
+        var sourceOptions = new SharedJournalOptions { FileShare = FileShare.None, AcquireLockFile = false, MaxPayloadLength = maxPayloadLength };
+        var tempOptions = new SharedJournalOptions { AcquireLockFile = false, MaxPayloadLength = maxPayloadLength };
 
         using (var source = new SharedJournal(path, sourceOptions))
         using (var temp = new SharedJournal(tempPath, tempOptions))
@@ -290,20 +288,13 @@ public sealed class SharedJournal : IDisposable
     private static void ValidateNextWriteOffset(long nextWriteOffset)
     {
         if (nextWriteOffset < JournalFormat.DataStartOffset || nextWriteOffset % JournalFormat.RecordAlignment != 0)
-            throw new InvalidOperationException(
-                $"Corrupted journal metadata: NextWriteOffset ({nextWriteOffset}) is invalid. " +
-                $"Must be >= {JournalFormat.DataStartOffset} and aligned to {JournalFormat.RecordAlignment}.");
+            throw new InvalidOperationException($"Corrupted journal metadata: NextWriteOffset ({nextWriteOffset}) is invalid. " +
+                                                $"Must be >= {JournalFormat.DataStartOffset} and aligned to {JournalFormat.RecordAlignment}.");
     }
-
-    private long ReserveSpace(int totalLength) =>
-        Interlocked.Add(ref _metaView.Value.NextWriteOffset, totalLength) - totalLength;
-
-    private long GetNextWriteOffset() =>
-        Volatile.Read(ref _metaView.Value.NextWriteOffset);
 
     private IEnumerable<JournalRecord> ReadRecords()
     {
-        var tail = GetNextWriteOffset();
+        var tail = Volatile.Read(ref _metaView.Value.NextWriteOffset);
         long offset = JournalFormat.DataStartOffset;
         using var readBuf = new FileReadBuffer(_fileHandle, _readAheadSize);
 
@@ -327,8 +318,15 @@ public sealed class SharedJournal : IDisposable
                     var gapStart = offset;
                     readBuf.Invalidate();
                     SkipCorruptedRegion(ref offset, tail);
-                    if (offset > gapStart && offset < tail)
-                        TryWriteSkipMarker(gapStart, offset, originalSlotValue);
+                    if (offset > gapStart && offset < tail && gapStart + JournalFormat.RecordHeaderSize <= RandomAccess.GetLength(_fileHandle))
+                    {
+                        // Attempt to atomically write a skip marker at gapStart covering the gap
+                        // up to offset. Uses an 8-byte CAS (magic + PayloadLength) via a temporary
+                        // memory-mapped view to avoid overwriting a concurrent writer's record.
+                        using var view = new MemoryMappedView<RecordHeader>(_fileHandle, gapStart);
+                        var skipHeader = RecordHeader.CreateSkip((int)(offset - gapStart) - JournalFormat.RecordHeaderSize);
+                        Interlocked.CompareExchange(ref RecordHeader.MagicAndPayloadLength(ref view.Value), RecordHeader.MagicAndPayloadLength(ref skipHeader), originalSlotValue);
+                    }
                     break;
                 case RecordStatus.Truncated:
                     yield break;
@@ -376,59 +374,43 @@ public sealed class SharedJournal : IDisposable
         return new RecordReadResult(RecordStatus.Record, totalLength, payloadMem);
     }
 
+    /// <summary>
+    /// Scans forward from <paramref name="offset"/> looking for the next
+    /// <see cref="JournalFormat.RecordHeaderMagic"/> byte pattern at an aligned offset.
+    /// Sets <paramref name="offset"/> to <c>tail</c> if none found.
+    /// </summary>
+    [SkipLocalsInit]
     private void SkipCorruptedRegion(ref long offset, long tail)
     {
         var maxGap = int.MaxValue - JournalFormat.RecordAlignment;
         var scanLimit = (long)Math.Min((ulong)tail, (ulong)offset + (ulong)maxGap);
-        offset = ScanForNextMagic(offset + 1, scanLimit);
-    }
+        var startOffset = offset + 1;
 
-    /// <summary>
-    /// Attempts to atomically write a skip marker at <paramref name="gapStart"/> covering
-    /// the gap up to <paramref name="gapEnd"/>. Uses an 8-byte CAS (magic + PayloadLength)
-    /// via a temporary memory-mapped view to avoid overwriting a concurrent writer's record.
-    /// The caller must ensure the gap fits in a single skip marker (at most ~2 GB).
-    /// </summary>
-    private void TryWriteSkipMarker(long gapStart, long gapEnd, long originalSlotValue)
-    {
-        if (gapStart + JournalFormat.RecordHeaderSize > RandomAccess.GetLength(_fileHandle))
-            return;
-
-        using var view = new MemoryMappedView<RecordHeader>(_fileHandle, gapStart);
-        var skipHeader = RecordHeader.CreateSkip((int)(gapEnd - gapStart) - JournalFormat.RecordHeaderSize);
-        Interlocked.CompareExchange(ref RecordHeader.MagicAndPayloadLength(ref view.Value), RecordHeader.MagicAndPayloadLength(ref skipHeader), originalSlotValue);
-    }
-
-    /// <summary>
-    /// Scans forward from <paramref name="startOffset"/> looking for the next
-    /// <see cref="JournalFormat.RecordHeaderMagic"/> byte pattern at an aligned offset.
-    /// Returns <paramref name="endOffset"/> if none found.
-    /// </summary>
-    [SkipLocalsInit]
-    private long ScanForNextMagic(long startOffset, long endOffset)
-    {
         Span<byte> chunk = stackalloc byte[4096];
-        var offset = JournalFormat.AlignUp(startOffset);
+        var scanOffset = JournalFormat.AlignUp(startOffset);
 
-        while (offset + JournalFormat.MinRecordSize <= endOffset)
+        while (scanOffset + JournalFormat.MinRecordSize <= scanLimit)
         {
-            var toRead = (int)Math.Min(chunk.Length, endOffset - offset);
-            var bytesRead = RandomAccess.Read(_fileHandle, chunk[..toRead], offset);
+            var toRead = (int)Math.Min(chunk.Length, scanLimit - scanOffset);
+            var bytesRead = RandomAccess.Read(_fileHandle, chunk[..toRead], scanOffset);
             if (bytesRead < sizeof(uint))
                 break;
 
             for (var i = 0; i <= bytesRead - sizeof(uint); i += JournalFormat.RecordAlignment)
             {
                 var magic = MemoryMarshal.Read<uint>(chunk[i..]);
-                if (magic == JournalFormat.RecordHeaderMagic || magic == JournalFormat.SkipHeaderMagic)
-                    return offset + i;
+                if (magic is JournalFormat.RecordHeaderMagic or JournalFormat.SkipHeaderMagic)
+                {
+                    offset = scanOffset + i;
+                    return;
+                }
             }
 
             // Advance past the last checked alignment boundary
             var lastChecked = (bytesRead - sizeof(uint)) / JournalFormat.RecordAlignment * JournalFormat.RecordAlignment;
-            offset += lastChecked + JournalFormat.RecordAlignment;
+            scanOffset += lastChecked + JournalFormat.RecordAlignment;
         }
 
-        return endOffset;
+        offset = scanLimit;
     }
 }
