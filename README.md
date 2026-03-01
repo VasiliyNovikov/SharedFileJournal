@@ -57,6 +57,8 @@ journal.Append("hello"u8);
 journal.Append(myPayloadBytes);
 
 // Read all valid records
+// Note: record.Payload is only valid until the next iteration.
+// Copy with .ToArray() if you need to keep it.
 foreach (var record in journal.ReadAll())
     Console.WriteLine($"offset={record.Offset} len={record.Payload.Length}");
 

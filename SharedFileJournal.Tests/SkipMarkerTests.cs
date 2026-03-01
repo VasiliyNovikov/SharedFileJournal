@@ -52,7 +52,7 @@ public class SkipMarkerTests
         // First read — should scan and write a skip marker
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
         }
 
@@ -97,7 +97,7 @@ public class SkipMarkerTests
         // Second read — should use skip marker (same results, faster)
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("before"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("after"u8.ToArray(), records[1].Payload.ToArray());
@@ -132,7 +132,7 @@ public class SkipMarkerTests
         // Reopen and verify skip marker is used correctly
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("first"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("last"u8.ToArray(), records[1].Payload.ToArray());
@@ -165,7 +165,7 @@ public class SkipMarkerTests
         // falls back to scan, and recovers "third"
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("first"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("third"u8.ToArray(), records[1].Payload.ToArray());
@@ -199,7 +199,7 @@ public class SkipMarkerTests
         // First read — writes skip markers
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(3, records.Count);
         }
 
@@ -239,7 +239,7 @@ public class SkipMarkerTests
         // Read — CAS uses current value as comparand, so it succeeds even for non-zero data
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
         }
 
@@ -278,7 +278,7 @@ public class SkipMarkerTests
         // ReadAll should recover past the corrupted record
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("before"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("after"u8.ToArray(), records[1].Payload.ToArray());
@@ -321,7 +321,7 @@ public class SkipMarkerTests
         for (var i = 0; i < 3; i++)
         {
             using var journal = new SharedJournal(JournalPath);
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count, $"Read pass {i}: expected 2 records");
             CollectionAssert.AreEqual("first"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("last"u8.ToArray(), records[1].Payload.ToArray());
@@ -357,7 +357,7 @@ public class SkipMarkerTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("keep-a"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("keep-b"u8.ToArray(), records[1].Payload.ToArray());

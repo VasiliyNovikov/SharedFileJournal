@@ -85,7 +85,7 @@ public class CompactionTests
         using (var journal = new SharedJournal(JournalPath))
         {
             journal.Append("after recovery"u8);
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(3, records.Count);
         }
     }
@@ -115,7 +115,7 @@ public class CompactionTests
         // Compact skips corruption and recovers records on both sides
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("good"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("also good"u8.ToArray(), records[1].Payload.ToArray());
@@ -172,7 +172,7 @@ public class CompactionTests
         // Verify the tail pointer was actually updated — next append starts right after valid records
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
 
             var expectedEnd = records[1].Offset +
@@ -207,7 +207,7 @@ public class CompactionTests
         // Verify records are contiguous (gap was closed)
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("before gap"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("after gap"u8.ToArray(), records[1].Payload.ToArray());
@@ -248,7 +248,7 @@ public class CompactionTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(3, records.Count);
             CollectionAssert.AreEqual("record-a"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("record-b"u8.ToArray(), records[1].Payload.ToArray());
@@ -302,7 +302,7 @@ public class CompactionTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(1, records.Count);
         }
     }
@@ -323,7 +323,7 @@ public class CompactionTests
 
         using (var journal = new SharedJournal(JournalPath))
         {
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual(new byte[50], records[0].Payload.ToArray());
             CollectionAssert.AreEqual(new byte[50], records[1].Payload.ToArray());
@@ -352,7 +352,7 @@ public class CompactionTests
         using (var journal = new SharedJournal(JournalPath))
         {
             journal.Append("after compact"u8);
-            var records = journal.ReadAll().ToList();
+            var records = journal.ReadAll().ToOwnedList();
             Assert.AreEqual(2, records.Count);
             CollectionAssert.AreEqual("original"u8.ToArray(), records[0].Payload.ToArray());
             CollectionAssert.AreEqual("after compact"u8.ToArray(), records[1].Payload.ToArray());

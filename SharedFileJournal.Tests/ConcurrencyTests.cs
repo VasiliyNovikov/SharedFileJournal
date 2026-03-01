@@ -94,7 +94,7 @@ public class ConcurrencyTests
 
         Task.WaitAll(tasks);
 
-        var records = journal.ReadAll().ToList();
+        var records = journal.ReadAll().ToOwnedList();
         Assert.AreEqual(threadCount * recordsPerThread, records.Count);
 
         // Verify all records have valid payloads
@@ -129,7 +129,7 @@ public class ConcurrencyTests
 
         Task.WaitAll(tasks);
 
-        var records = journal.ReadAll().ToList();
+        var records = journal.ReadAll().ToOwnedList();
         Assert.AreEqual(threadCount * recordsPerThread, records.Count);
     }
 
@@ -172,7 +172,7 @@ public class ConcurrencyTests
         journal2.Append("from-j2"u8);
         journal3.Append("from-j3"u8);
 
-        var records = journal1.ReadAll().ToList();
+        var records = journal1.ReadAll().ToOwnedList();
         Assert.AreEqual(3, records.Count);
     }
 
@@ -204,7 +204,7 @@ public class ConcurrencyTests
         Task.WaitAll(task1, task2);
 
         // Read from either instance — should see all records
-        var records = journal1.ReadAll().ToList();
+        var records = journal1.ReadAll().ToOwnedList();
         Assert.AreEqual(recordsPerInstance * 2, records.Count);
 
         // Verify both instances' records are present
