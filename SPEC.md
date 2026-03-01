@@ -203,37 +203,54 @@ the same file concurrently.
   Process A                          File (memory-mapped)
   ─────────                          ────────────────────
   CAS(Magic, 0 -> SFJMETA) ──────>  Magic = SFJMETA
-  Volatile.Write(NextWriteOffset,    NextWriteOffset = 4096
-                 4096) ───────────>
+  CAS(NextWriteOffset, 0 -> 4096)   NextWriteOffset = 4096
+  validate NextWriteOffset >= 4096
+          and aligned to 16
   Volatile.Write(Version, 2) ─────>  Version = 2
 ```
 
-The initializer writes `NextWriteOffset` **before** `Version`. This ensures
-that any process spinning on `Version` will see a valid `NextWriteOffset`
-when the spin completes.
+The initializer uses CAS for `NextWriteOffset` (rather than a plain write)
+so that a concurrent completer cannot overwrite a value that was already
+advanced by appends. After the CAS, `NextWriteOffset` is validated — if
+the CAS failed because the field already held a corrupt non-zero value,
+an `InvalidOperationException` is thrown before `Version` is published,
+preventing the file from becoming "initialized" with a corrupt tail pointer.
+`NextWriteOffset` is validated **before** `Version` is written so that
+`Version != 0` always implies a valid `NextWriteOffset`.
 
 ### 4.2 Existing File Path (Follower Joins)
 
+When the CAS on `Magic` fails (another process already set it), the follower
+reads `Version`:
+
+- **`Version != 0`**: The file is fully initialized. The follower validates
+  `Magic`, `Version`, and `NextWriteOffset`.
+- **`Version == 0`**: The initializer is still running or crashed before
+  writing `Version`. The follower immediately completes initialization using
+  the same lock-free path described in §4.3.
+
+No spinning or timeout is needed — all initialization writes are idempotent
+or CAS-guarded, so concurrent completion is safe.
+
 ```
-  Process B                          File (memory-mapped)
+  Process B (Version != 0)           File (memory-mapped)
   ─────────                          ────────────────────
   CAS(Magic, 0 -> SFJMETA)          returns SFJMETA (lost race)
-  spin while Version == 0 ◄──────── Version = 2 (eventually visible)
+  read Version ◄──────────────────── Version = 2
   validate Magic == SFJMETA
   validate Version == 2
   validate NextWriteOffset >= 4096
           and aligned to 16
 ```
 
-### 4.3 Crash Recovery Path
+### 4.3 Lock-Free Completion Path
 
-If Process A crashed after writing `Magic` but before writing `Version`,
-followers will spin on `Version == 0` indefinitely. After a **5-second
-deadline**, the follower assumes the initializer crashed and completes
-initialization:
+If `Version == 0` after the CAS on `Magic` fails, the follower completes
+initialization itself. This handles both the case where the initializer is
+still running (concurrent completion) and the case where it crashed:
 
 ```
-  Process B (after 5s timeout)       File (memory-mapped)
+  Process B (Version == 0)           File (memory-mapped)
   ─────────                          ────────────────────
   validate Magic == SFJMETA
   CAS(NextWriteOffset, 0 -> 4096)   NextWriteOffset = 4096 (if was 0)
@@ -243,9 +260,11 @@ initialization:
 ```
 
 The CAS on `NextWriteOffset` only succeeds if it is still 0 (the initializer
-may have written it before crashing). After the CAS, `NextWriteOffset` is
-validated -- if it holds a corrupted non-zero value that is invalid (below
-`DataStartOffset` or misaligned), an `InvalidOperationException` is thrown.
+may have written it before crashing, or another process may have already
+completed initialization and appended records). After the CAS,
+`NextWriteOffset` is validated — if it holds a corrupted non-zero value that
+is invalid (below `DataStartOffset` or misaligned), an
+`InvalidOperationException` is thrown.
 
 ### 4.4 NextWriteOffset Validation
 
@@ -670,32 +689,37 @@ The `NextWriteOffset` field is placed at byte offset 64 to guarantee:
 
 Multiple processes may try to initialize the same file simultaneously. The
 `Interlocked.CompareExchange` on `Magic` acts as a one-shot initialization
-lock:
+gate:
 
 ```
   Process A (winner)                Process B (loser)
   ──────────────────                ─────────────────
   CAS(Magic, 0->SFJMETA) = 0      CAS(Magic, 0->SFJMETA) = SFJMETA
   (won: Magic was 0)               (lost: Magic already set)
-  Write NextWriteOffset = 4096     Spin on Version == 0...
-  Write Version = 2 ─────────────> Version becomes visible
-                                   Validate Magic, Version,
-                                   NextWriteOffset
-                                   Proceed
+  CAS(NextWriteOffset, 0->4096)    read Version == 0
+  validate NextWriteOffset         CAS(NextWriteOffset, 0->4096)
+  Write Version = 2                validate NextWriteOffset
+                                   Write Version = 2
 ```
+
+No spinning or timeout is required. The loser immediately attempts lock-free
+completion (§4.3) — all initialization writes are idempotent or CAS-guarded,
+so concurrent completion by both processes is safe.
 
 ### 8.5 Ordering Guarantees
 
 The initialization protocol relies on the following ordering:
 
-1. **Winner** writes `NextWriteOffset` before `Version` (both via
-   `Volatile.Write`, which provides release semantics).
-2. **Follower** spins on `Version` via `Volatile.Read` (acquire semantics).
-   Once `Version != 0`, the follower is guaranteed to see the
-   `NextWriteOffset` value written by the winner.
+1. **Winner** uses `Interlocked.CompareExchange` for `NextWriteOffset`
+   (CAS from 0), then validates the result, then writes `Version` via
+   `Volatile.Write` (release semantics).
+2. **Follower** reads `Version` via `Volatile.Read` (acquire semantics).
+   If `Version != 0`, the follower is guaranteed to see a valid
+   `NextWriteOffset`. If `Version == 0`, the follower completes
+   initialization itself using the same CAS-guarded protocol.
 
-This establishes a happens-before relationship:
-`Write(NextWriteOffset) -> Write(Version) -> Read(Version) -> Read(NextWriteOffset)`
+This establishes a happens-before relationship for the normal path:
+`CAS(NextWriteOffset) -> Write(Version) -> Read(Version) -> Read(NextWriteOffset)`
 
 ### 8.6 Lock File Protocol
 
