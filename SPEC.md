@@ -687,11 +687,12 @@ between normal journal instances and the `Compact` operation.
 
 ## 9. Configuration
 
-| Parameter          | Default    | Range                                        | Description                              |
-|--------------------|------------|----------------------------------------------|------------------------------------------|
-| `FlushMode`        | `None`     | `None`, `WriteThrough`                       | Write durability mode                    |
-| `MaxPayloadLength` | 128 MB     | `[1, INT_MAX - RecordHeaderSize - Alignment]` | Max payload; enforced on write and read  |
-| `FileShare`        | `ReadWrite`| (internal)                                   | File sharing mode for the OS handle      |
+| Parameter          | Default      | Range                                         | Description                                |
+|--------------------|--------------|-----------------------------------------------|--------------------------------------------|
+| `FlushMode`        | `None`       | `None`, `WriteThrough`                        | Write durability mode                      |
+| `MaxPayloadLength` | 128 MB       | `[1, INT_MAX - RecordHeaderSize - Alignment]` | Max payload; enforced on write and read    |
+| `ReadAheadSize`    | 64 KB        | `[1, ∞)`                                      | Read-ahead buffer size for sequential reads|
+| `FileShare`        | `ReadWrite`  | (internal)                                    | File sharing mode for the OS handle        |
 
 `MaxPayloadLength` is enforced on both paths:
 - **Write**: `Append` throws `ArgumentOutOfRangeException` if `payload.Length > MaxPayloadLength`.
@@ -702,14 +703,14 @@ between normal journal instances and the `Compact` operation.
 
 ## 10. Constants Summary
 
-| Constant            | Value                  | Description                          |
-|---------------------|------------------------|--------------------------------------|
-| `MetadataMagic`     | `0x004154454D4A4653`   | "SFJMETA\0" (little-endian)         |
-| `MetadataVersion`   | `1`                    | Current format version               |
-| `MetadataFileSize`  | `4096`                 | Metadata region size                 |
-| `DataStartOffset`   | `4096`                 | First record offset                  |
-| `RecordHeaderMagic` | `0x524A4653`           | "SFJR" (little-endian)              |
-| `SkipHeaderMagic`   | `0x534A4653`           | "SFJS" (little-endian)              |
-| `RecordAlignment`   | `16`                   | All records aligned to 16 bytes      |
-| `RecordHeaderSize`  | `16`                   | sizeof(RecordHeader)                 |
-| `MinRecordSize`     | `16`                   | Smallest possible record (empty)     |
+| Constant            | Value                | Description                     |
+|---------------------|----------------------|---------------------------------|
+| `MetadataMagic`     | `0x004154454D4A4653` | "SFJMETA\0" (little-endian)     |
+| `MetadataVersion`   | `1`                  | Current format version          |
+| `MetadataFileSize`  | `4096`               | Metadata region size            |
+| `DataStartOffset`   | `4096`               | First record offset             |
+| `RecordHeaderMagic` | `0x524A4653`         | "SFJR" (little-endian)          |
+| `SkipHeaderMagic`   | `0x534A4653`         | "SFJS" (little-endian)          |
+| `RecordAlignment`   | `16`                 | All records aligned to 16 bytes |
+| `RecordHeaderSize`  | `16`                 | sizeof(RecordHeader)            |
+| `MinRecordSize`     | `16`                 | Smallest possible record (empty)|
