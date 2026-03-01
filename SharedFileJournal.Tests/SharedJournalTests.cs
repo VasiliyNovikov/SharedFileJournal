@@ -169,6 +169,30 @@ public class SharedJournalTests
     }
 
     [TestMethod]
+    public void ReadAll_JournalLargerThanReadBuffer_ReadsAllRecords()
+    {
+        using var journal = new SharedJournal(JournalPath);
+
+        // Write enough records to exceed 64 KB read buffer several times over.
+        // Each record: 16-byte header + 200-byte payload = 208 bytes, aligned to 16 → 208 bytes.
+        // 2000 records × 208 bytes ≈ 406 KB ≈ 6× the 64 KB buffer.
+        const int recordCount = 2000;
+        var expected = new byte[recordCount][];
+        var rng = new Random(42);
+        for (var i = 0; i < recordCount; i++)
+        {
+            expected[i] = new byte[200];
+            rng.NextBytes(expected[i]);
+            journal.Append(expected[i]);
+        }
+
+        var records = journal.ReadAll().ToOwnedList();
+        Assert.AreEqual(recordCount, records.Count);
+        for (var i = 0; i < recordCount; i++)
+            CollectionAssert.AreEqual(expected[i], records[i].Payload.ToArray());
+    }
+
+    [TestMethod]
     public void ReadAll_SkipsBrokenRecord_ReturnsValidRecords()
     {
         using (var journal = new SharedJournal(JournalPath))
