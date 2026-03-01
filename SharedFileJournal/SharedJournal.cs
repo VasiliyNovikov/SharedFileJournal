@@ -256,41 +256,34 @@ public sealed class SharedJournal : IDisposable
     {
         if (Interlocked.CompareExchange(ref meta.Magic, JournalFormat.MetadataMagic, 0) == 0)
         {
-            // Won the initialization race — write NextWriteOffset before Version
-            // so followers spinning on Version cannot proceed with an uninitialized tail
-            Volatile.Write(ref meta.NextWriteOffset, (long)JournalFormat.DataStartOffset);
+            // Won the initialization race — CAS NextWriteOffset so a concurrent
+            // completer cannot overwrite an already-advanced value
+            Interlocked.CompareExchange(ref meta.NextWriteOffset, JournalFormat.DataStartOffset, 0);
+            ValidateNextWriteOffset(Volatile.Read(ref meta.NextWriteOffset));
             Volatile.Write(ref meta.Version, JournalFormat.MetadataVersion);
         }
         else
         {
-            // Another process initialized it — spin until version is written
-            var deadline = Environment.TickCount64 + 5000;
-            SpinWait spin = default;
-            while (Volatile.Read(ref meta.Version) == 0)
-            {
-                spin.SpinOnce();
-                if (Environment.TickCount64 > deadline)
-                {
-                    // The initializer may have crashed after setting Magic but before
-                    // writing Version. If Magic is valid, complete the initialization.
-                    if (Volatile.Read(ref meta.Magic) != JournalFormat.MetadataMagic)
-                        throw new InvalidOperationException("Invalid journal metadata file: wrong magic.");
-
-                    Interlocked.CompareExchange(ref meta.NextWriteOffset, JournalFormat.DataStartOffset, 0);
-                    ValidateNextWriteOffset(Volatile.Read(ref meta.NextWriteOffset));
-                    Volatile.Write(ref meta.Version, JournalFormat.MetadataVersion);
-                    return;
-                }
-            }
-
             if (Volatile.Read(ref meta.Magic) != JournalFormat.MetadataMagic)
                 throw new InvalidOperationException("Invalid journal metadata file: wrong magic.");
 
             var version = Volatile.Read(ref meta.Version);
-            if (version != JournalFormat.MetadataVersion)
-                throw new InvalidOperationException($"Unsupported journal version: {version}");
+            if (version == 0)
+            {
+                // Version not yet visible — the initializer is either still running
+                // or crashed. Safely complete initialization: CAS guards
+                // NextWriteOffset against overwriting a value already advanced by appends.
+                Interlocked.CompareExchange(ref meta.NextWriteOffset, JournalFormat.DataStartOffset, 0);
+                ValidateNextWriteOffset(Volatile.Read(ref meta.NextWriteOffset));
+                Volatile.Write(ref meta.Version, JournalFormat.MetadataVersion);
+            }
+            else
+            {
+                if (version != JournalFormat.MetadataVersion)
+                    throw new InvalidOperationException($"Unsupported journal version: {version}");
 
-            ValidateNextWriteOffset(Volatile.Read(ref meta.NextWriteOffset));
+                ValidateNextWriteOffset(Volatile.Read(ref meta.NextWriteOffset));
+            }
         }
     }
 
