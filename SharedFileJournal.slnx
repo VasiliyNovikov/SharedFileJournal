@@ -19,5 +19,6 @@
   </Folder>
   <Project Path="SharedFileJournal/SharedFileJournal.csproj" />
   <Project Path="SharedFileJournal.Tests/SharedFileJournal.Tests.csproj" />
+  <Project Path="SharedFileJournal.Benchmarks/SharedFileJournal.Benchmarks.csproj" />
   <Project Path="SharedFileJournal.Demo/SharedFileJournal.Demo.csproj" />
 </Solution>

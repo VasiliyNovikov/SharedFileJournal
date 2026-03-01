@@ -21,4 +21,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="SharedFileJournal.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.IO.Hashing" />
+  </ItemGroup>
 </Project>
