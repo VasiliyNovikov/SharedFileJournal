@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <PackageVersion>$(Version)</PackageVersion>
+    <Authors>Vasyl Novikov</Authors>
+    <Description>Concurrent inter-process file-based journal</Description>
+    <Copyright>Vasyl Novikov</Copyright>
+    <PackageProjectUrl>https://github.com/VasiliyNovikov/SharedFileJournal</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/VasiliyNovikov/SharedFileJournal</RepositoryUrl>
+    <RepositoryType>Git</RepositoryType>
+    <PackageTags>journal;log</PackageTags>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SharedFileJournal.Tests" />
+  </ItemGroup>
+</Project>

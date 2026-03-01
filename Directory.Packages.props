@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="MSTest" Version="4.1.0" />
+    <PackageVersion Include="NuGet.Versioning" Version="7.3.0" />
+  </ItemGroup>
+</Project>
