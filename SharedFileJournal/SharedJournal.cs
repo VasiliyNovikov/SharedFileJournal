@@ -3,9 +3,8 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.MemoryMappedFiles;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 using Microsoft.Win32.SafeHandles;
 
@@ -105,6 +104,27 @@ public sealed class SharedJournal : IDisposable
         }
     }
 
+    #region Append / AppendAsync
+
+    /// <summary>
+    /// Validates, reserves space, allocates a buffer, and serializes the record.
+    /// The caller owns the returned buffer and must return it to <see cref="ArrayPool{T}.Shared"/>.
+    /// </summary>
+    private (byte[] Buffer, int DataLength, long Offset, int AlignedLength) PrepareAppend(ReadOnlySpan<byte> payload)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(payload.Length, _maxPayloadLength, nameof(payload));
+
+        var dataLength = JournalFormat.RecordHeaderSize + payload.Length;
+        var alignedLength = JournalFormat.AlignRecordSize(dataLength);
+        var offset = Interlocked.Add(ref _metaView.Value.NextWriteOffset, alignedLength) - alignedLength;
+
+        var buffer = ArrayPool<byte>.Shared.Rent(dataLength);
+        JournalFormat.WriteRecord(buffer, payload);
+
+        return (buffer, dataLength, offset, alignedLength);
+    }
+
     /// <summary>
     /// Appends a record with the given payload to the journal.
     /// </summary>
@@ -114,27 +134,16 @@ public sealed class SharedJournal : IDisposable
     /// the data file is flushed to disk after this write regardless of the journal-level setting.
     /// </param>
     /// <returns>Information about the appended record.</returns>
-    [SkipLocalsInit]
     public JournalAppendResult Append(ReadOnlySpan<byte> payload, FlushMode flushMode = FlushMode.None)
     {
-        ObjectDisposedException.ThrowIf(_disposed != 0, this);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(payload.Length, _maxPayloadLength, nameof(payload));
-
-        var dataLength = JournalFormat.RecordHeaderSize + payload.Length;
-        var alignedLength = JournalFormat.AlignRecordSize(dataLength);
-        var offset = Interlocked.Add(ref _metaView.Value.NextWriteOffset, alignedLength) - alignedLength;
-
-        byte[]? rented = null;
-        var span = dataLength <= 2048 ? stackalloc byte[dataLength] : (rented = ArrayPool<byte>.Shared.Rent(dataLength));
+        var (buffer, dataLength, offset, alignedLength) = PrepareAppend(payload);
         try
         {
-            JournalFormat.WriteRecord(span, payload);
-            RandomAccess.Write(_fileHandle, span[..dataLength], offset);
+            RandomAccess.Write(_fileHandle, buffer.AsSpan(0, dataLength), offset);
         }
         finally
         {
-            if (rented is not null)
-                ArrayPool<byte>.Shared.Return(rented);
+            ArrayPool<byte>.Shared.Return(buffer);
         }
 
         if (flushMode == FlushMode.WriteThrough)
@@ -142,6 +151,44 @@ public sealed class SharedJournal : IDisposable
 
         return new JournalAppendResult(offset, alignedLength);
     }
+
+    /// <summary>
+    /// Appends a record with the given payload to the journal.
+    /// </summary>
+    /// <param name="payload">The record payload. May be empty.</param>
+    /// <param name="flushMode">
+    /// Per-record flush override. When set to <see cref="FlushMode.WriteThrough"/>,
+    /// the data file is flushed to disk after this write regardless of the journal-level setting.
+    /// </param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>Information about the appended record.</returns>
+    public ValueTask<JournalAppendResult> AppendAsync(ReadOnlySpan<byte> payload, FlushMode flushMode = FlushMode.None, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var (buffer, dataLength, offset, alignedLength) = PrepareAppend(payload);
+        return WriteAndCompleteAppendAsync(buffer, dataLength, offset, alignedLength, flushMode, cancellationToken);
+    }
+
+    private async ValueTask<JournalAppendResult> WriteAndCompleteAppendAsync(byte[] buffer, int dataLength, long offset, int alignedLength, FlushMode flushMode, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RandomAccess.WriteAsync(_fileHandle, buffer.AsMemory(0, dataLength), offset, cancellationToken);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+
+        if (flushMode == FlushMode.WriteThrough)
+            RandomAccess.FlushToDisk(_fileHandle);
+
+        return new JournalAppendResult(offset, alignedLength);
+    }
+
+    #endregion
+
+    #region ReadAll / ReadAllAsync
 
     /// <summary>
     /// Reads all valid records from the journal sequentially, skipping corrupted or
@@ -164,8 +211,37 @@ public sealed class SharedJournal : IDisposable
     public IEnumerable<JournalRecord> ReadAll()
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
-        return ReadRecords();
+        return CreateReadSequence();
     }
+
+    /// <summary>
+    /// Asynchronously reads all valid records from the journal sequentially, skipping corrupted or
+    /// incomplete regions and continuing to recover subsequent records.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Payload lifetime:</b> Each <see cref="JournalRecord.Payload"/> is backed by a
+    /// pooled buffer that is reused across iterations. The payload is only valid until the
+    /// next call to <c>MoveNextAsync</c> on the enumerator (or until enumeration ends). Callers
+    /// that need to retain payload data must copy it before advancing, for example via
+    /// <see cref="ReadOnlyMemory{T}.ToArray"/>.
+    /// </para>
+    /// <para>
+    /// When corruption is encountered, the reader scans forward for the next valid record
+    /// header and may write skip markers to the journal file so that future reads can
+    /// efficiently bypass the corrupted region.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    public IAsyncEnumerable<JournalRecord> ReadAllAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        return CreateReadSequence(cancellationToken: cancellationToken);
+    }
+
+    #endregion
+
+    #region Flush / FlushAsync
 
     /// <summary>
     /// Flushes all buffered data to the underlying storage device.
@@ -177,22 +253,42 @@ public sealed class SharedJournal : IDisposable
     }
 
     /// <summary>
+    /// Asynchronously flushes all buffered data to the underlying storage device.
+    /// </summary>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        cancellationToken.ThrowIfCancellationRequested();
+        RandomAccess.FlushToDisk(_fileHandle);
+        return ValueTask.CompletedTask;
+    }
+
+    #endregion
+
+    private JournalRecordSequence CreateReadSequence(bool allowSkipMarkerWrites = true, CancellationToken cancellationToken = default) =>
+        new(_fileHandle, _maxPayloadLength, _readAheadSize, () => Volatile.Read(ref _metaView.Value.NextWriteOffset), allowSkipMarkerWrites, cancellationToken);
+
+    #region Compact / CompactAsync
+
+    /// <summary>
     /// Compacts the journal at the specified path, reclaiming space from gaps left by
     /// crashed writers and removing corrupted or incomplete records.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Creates a temporary journal, copies all valid records from the source (skipping gaps
-    /// and corrupted regions), then atomically replaces the original file. The read pass may
-    /// write skip markers to the source file when corruption is encountered (see
-    /// <see cref="ReadAll"/>), but the record data is not otherwise modified until the swap.
+    /// and corrupted regions), then atomically replaces the original file. The read pass uses
+    /// the same validation and recovery rules as <see cref="ReadAll"/>, but does not write
+    /// skip markers back to the source file.
     /// </para>
     /// <para>
-    /// <b>Lock file protocol:</b> Acquires an exclusive lock on a companion lock file
+    /// <b>Lock file protocol:</b> Attempts to acquire an exclusive lock on a companion lock file
     /// (<c>&lt;path&gt;.lock</c>) before opening the source journal. Normal
     /// <see cref="SharedJournal"/> instances hold this lock in shared mode, so the exclusive
-    /// acquisition blocks until all existing instances are closed and prevents new ones from
-    /// opening. The lock is held through the entire operation including the
+    /// acquisition fails immediately with <see cref="IOException"/> if any instance is open.
+    /// When acquired, the lock prevents new instances from opening and is held through the
+    /// entire operation including the
     /// <see cref="File.Move(string, string, bool)"/> that replaces the journal file,
     /// eliminating the race window between closing the source and the rename.
     /// </para>
@@ -222,7 +318,7 @@ public sealed class SharedJournal : IDisposable
         using (var source = new SharedJournal(path, sourceOptions))
         using (var temp = new SharedJournal(tempPath, tempOptions))
         {
-            foreach (var record in source.ReadAll())
+            foreach (var record in source.CreateReadSequence(allowSkipMarkerWrites: false))
                 temp.Append(record.Payload.Span);
             temp.Flush();
         }
@@ -230,6 +326,79 @@ public sealed class SharedJournal : IDisposable
         File.Move(tempPath, path, overwrite: true);
         // journalLock disposed here — after the rename
     }
+
+    /// <summary>
+    /// Asynchronously compacts the journal at the specified path, reclaiming space from gaps left by
+    /// crashed writers and removing corrupted or incomplete records.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Creates a temporary journal, copies all valid records from the source (skipping gaps
+    /// and corrupted regions), then atomically replaces the original file. The read pass uses
+    /// the same validation and recovery rules as <see cref="ReadAllAsync"/>, but does not write
+    /// skip markers back to the source file.
+    /// </para>
+    /// <para>
+    /// <b>Lock file protocol:</b> Attempts to acquire an exclusive lock on a companion lock file
+    /// (<c>&lt;path&gt;.lock</c>) before opening the source journal. Normal
+    /// <see cref="SharedJournal"/> instances hold this lock in shared mode, so the exclusive
+    /// acquisition fails immediately with <see cref="IOException"/> if any instance is open.
+    /// When acquired, the lock prevents new instances from opening and is held through the
+    /// entire operation including the
+    /// <see cref="File.Move(string, string, bool)"/> that replaces the journal file,
+    /// eliminating the race window between closing the source and the rename.
+    /// </para>
+    /// </remarks>
+    /// <param name="path">Path to the journal file to compact.</param>
+    /// <param name="options">
+    /// Optional configuration. If the journal was written with a non-default
+    /// <see cref="SharedJournalOptions.MaxPayloadLength"/>, the same value should be passed here;
+    /// otherwise records exceeding the default limit will be silently treated as corrupted and
+    /// dropped during the read pass. Uses defaults if <c>null</c>.
+    /// </param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    public static async ValueTask CompactAsync(string path, SharedJournalOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tempPath = path + ".compact";
+        var maxPayloadLength = (options ?? SharedJournalOptions.Default).MaxPayloadLength;
+
+        // Exclusive lock — held through entire operation including File.Move
+        using var journalLock = new JournalLockFile(path, FileShare.None);
+        var moved = false;
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Delete(tempPath);
+
+            var sourceOptions = new SharedJournalOptions { FileShare = FileShare.None, AcquireLockFile = false, MaxPayloadLength = maxPayloadLength };
+            var tempOptions = new SharedJournalOptions { AcquireLockFile = false, MaxPayloadLength = maxPayloadLength };
+
+            using (var source = new SharedJournal(path, sourceOptions))
+            using (var temp = new SharedJournal(tempPath, tempOptions))
+            {
+                await foreach (var record in source.CreateReadSequence(allowSkipMarkerWrites: false, cancellationToken: cancellationToken))
+                    await temp.AppendAsync(record.Payload.Span, cancellationToken: cancellationToken);
+                await temp.FlushAsync(cancellationToken);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(tempPath, path, overwrite: true);
+            moved = true;
+        }
+        finally
+        {
+            if (!moved)
+                File.Delete(tempPath);
+        }
+    }
+
+    #endregion
+
+    #region Lifecycle
 
     /// <summary>
     /// Releases all resources used by this journal instance.
@@ -249,6 +418,10 @@ public sealed class SharedJournal : IDisposable
         _fileHandle.Dispose();
         _lock?.Dispose();
     }
+
+    #endregion
+
+    #region Initialization
 
     private static void InitializeOrValidateMetadata(ref MetadataHeader meta)
     {
@@ -292,125 +465,5 @@ public sealed class SharedJournal : IDisposable
                                                 $"Must be >= {JournalFormat.DataStartOffset} and aligned to {JournalFormat.RecordAlignment}.");
     }
 
-    private IEnumerable<JournalRecord> ReadRecords()
-    {
-        var tail = Volatile.Read(ref _metaView.Value.NextWriteOffset);
-        long offset = JournalFormat.DataStartOffset;
-        using var readBuf = new FileReadBuffer(_fileHandle, _readAheadSize);
-
-        while (offset + JournalFormat.MinRecordSize <= tail)
-        {
-            var result = ValidateRecord(readBuf, offset, tail, out var originalSlotValue);
-            switch (result.Status)
-            {
-                case RecordStatus.Record:
-                    yield return new JournalRecord(offset, result.Payload);
-                    offset += result.TotalLength;
-                    break;
-                case RecordStatus.Skip:
-                    offset += result.TotalLength;
-                    break;
-                case RecordStatus.Incomplete:
-                    readBuf.Invalidate();
-                    SkipCorruptedRegion(ref offset, tail);
-                    break;
-                case RecordStatus.Corrupt:
-                    var gapStart = offset;
-                    readBuf.Invalidate();
-                    SkipCorruptedRegion(ref offset, tail);
-                    if (offset > gapStart && offset < tail && gapStart + JournalFormat.RecordHeaderSize <= RandomAccess.GetLength(_fileHandle))
-                    {
-                        // Attempt to atomically write a skip marker at gapStart covering the gap
-                        // up to offset. Uses an 8-byte CAS (magic + PayloadLength) via a temporary
-                        // memory-mapped view to avoid overwriting a concurrent writer's record.
-                        using var view = new MemoryMappedView<RecordHeader>(_fileHandle, gapStart);
-                        var skipHeader = RecordHeader.CreateSkip((int)(offset - gapStart) - JournalFormat.RecordHeaderSize);
-                        Interlocked.CompareExchange(ref RecordHeader.MagicAndPayloadLength(ref view.Value), RecordHeader.MagicAndPayloadLength(ref skipHeader), originalSlotValue);
-                    }
-                    break;
-                case RecordStatus.Truncated:
-                    yield break;
-            }
-        }
-    }
-
-    private RecordReadResult ValidateRecord(FileReadBuffer readBuf, long offset, long tail, out long originalSlotValue)
-    {
-        var headerMem = readBuf.Read(offset, JournalFormat.RecordHeaderSize);
-        if (headerMem.IsEmpty)
-        {
-            originalSlotValue = 0;
-            return new RecordReadResult(RecordStatus.Truncated);
-        }
-
-        var header = MemoryMarshal.Read<RecordHeader>(headerMem.Span);
-        originalSlotValue = RecordHeader.MagicAndPayloadLength(ref header);
-
-        var status = header.Validate();
-
-        if (status is RecordStatus.Corrupt or RecordStatus.Incomplete)
-            return new RecordReadResult(status);
-
-        var totalLength = JournalFormat.AlignRecordSize(JournalFormat.RecordHeaderSize + header.PayloadLength);
-
-        if (status == RecordStatus.Skip)
-            return offset + totalLength <= tail
-                ? new RecordReadResult(RecordStatus.Skip, totalLength: totalLength)
-                : new RecordReadResult(RecordStatus.Incomplete);
-
-        if (header.PayloadLength > _maxPayloadLength)
-            return new RecordReadResult(RecordStatus.Incomplete);
-
-        if (offset + totalLength > tail)
-            return new RecordReadResult(RecordStatus.Incomplete);
-
-        var payloadMem = readBuf.Read(offset + JournalFormat.RecordHeaderSize, header.PayloadLength);
-        if (payloadMem.IsEmpty && header.PayloadLength > 0)
-            return new RecordReadResult(RecordStatus.Incomplete);
-
-        if (JournalFormat.ComputeChecksum(payloadMem.Span) != header.Checksum)
-            return new RecordReadResult(RecordStatus.Incomplete);
-
-        return new RecordReadResult(RecordStatus.Record, totalLength, payloadMem);
-    }
-
-    /// <summary>
-    /// Scans forward from <paramref name="offset"/> looking for the next
-    /// <see cref="JournalFormat.RecordHeaderMagic"/> byte pattern at an aligned offset.
-    /// Sets <paramref name="offset"/> to <c>tail</c> if none found.
-    /// </summary>
-    [SkipLocalsInit]
-    private void SkipCorruptedRegion(ref long offset, long tail)
-    {
-        var maxGap = int.MaxValue - JournalFormat.RecordAlignment;
-        var scanLimit = (long)Math.Min((ulong)tail, (ulong)offset + (ulong)maxGap);
-        var startOffset = offset + 1;
-
-        Span<byte> chunk = stackalloc byte[4096];
-        var scanOffset = JournalFormat.AlignUp(startOffset);
-
-        while (scanOffset + JournalFormat.MinRecordSize <= scanLimit)
-        {
-            var toRead = (int)Math.Min(chunk.Length, scanLimit - scanOffset);
-            var bytesRead = RandomAccess.Read(_fileHandle, chunk[..toRead], scanOffset);
-            if (bytesRead < sizeof(uint))
-                break;
-
-            for (var i = 0; i <= bytesRead - sizeof(uint); i += JournalFormat.RecordAlignment)
-            {
-                var magic = MemoryMarshal.Read<uint>(chunk[i..]);
-                if (magic is JournalFormat.RecordHeaderMagic or JournalFormat.SkipHeaderMagic)
-                {
-                    offset = scanOffset + i;
-                    return;
-                }
-            }
-
-            // Advance past the last checked alignment boundary
-            var lastChecked = (bytesRead - sizeof(uint)) / JournalFormat.RecordAlignment * JournalFormat.RecordAlignment;
-            scanOffset += lastChecked + JournalFormat.RecordAlignment;
-        }
-
-        offset = scanLimit;
-    }
+    #endregion
 }
