@@ -117,6 +117,24 @@ public class SharedJournalTests
     }
 
     [TestMethod]
+    public void ReadAll_ResultUsesFirstEnumerationSnapshot()
+    {
+        using var journal = new SharedJournal(JournalPath);
+
+        var records = journal.ReadAll();
+        journal.Append("first"u8);
+
+        var firstPass = records.ToOwnedList();
+        journal.Append("second"u8);
+        var secondPass = records.ToOwnedList();
+
+        Assert.AreEqual(1, firstPass.Count);
+        Assert.AreEqual(1, secondPass.Count);
+        Assert.AreEqual("first", Encoding.UTF8.GetString(firstPass[0].Payload.Span));
+        Assert.AreEqual("first", Encoding.UTF8.GetString(secondPass[0].Payload.Span));
+    }
+
+    [TestMethod]
     public void Append_RecordOffsets_AreSequential()
     {
         using var journal = new SharedJournal(JournalPath);

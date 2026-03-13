@@ -584,9 +584,10 @@ removed.
   4. Create a new temporary journal at <path>.compact (also with
      AcquireLockFile = false to avoid creating a spurious .compact.lock file).
 
-  5. Iterate source.ReadAll():
+  5. Iterate source records using the same validation rules as ReadAll():
        - For each valid record, Append its payload to the temp journal.
        - Corrupted regions and skip markers are not copied.
+       - Skip markers are not written back to the source journal.
 
   6. Flush the temporary journal to disk.
 
@@ -600,9 +601,9 @@ removed.
 
 ### 7.2 Side Effects
 
-The read pass (step 5) may write skip markers to the **source** file when
-corruption is encountered (see section 6.5). The record data in the source
-is not otherwise modified.
+The read pass (step 5) does not modify the **source** file. Corrupted
+regions are skipped in-memory and only valid records are copied into the
+temporary journal.
 
 ### 7.3 Result
 
@@ -618,10 +619,11 @@ journal instances:
   (`FileShare.ReadWrite`) during construction. Multiple instances can
   coexist.
 - **Compact** acquires the lock file in **exclusive** mode
-  (`FileShare.None`) before opening the source journal (step 2). This
-  blocks until all shared holders have released, and prevents new
-  instances from opening until the entire operation — including the
-  file replacement (step 8) — is complete.
+  (`FileShare.None`) before opening the source journal (step 2). If any
+  shared holder is still open, this acquisition fails immediately with
+  `IOException`. When acquired, it prevents new instances from opening
+  until the entire operation — including the file replacement (step 8)
+  — is complete.
 
 This eliminates the race window that previously existed between closing the
 source journal (step 7) and the file replacement (step 8). On Unix,
@@ -634,9 +636,8 @@ The lock file is persistent and is never deleted.
 ### 7.5 Crash Safety
 
 If the process crashes during compaction:
-- Before step 7: The original file is untouched (except for skip markers).
-  A stale `.compact` file may be left behind and will be cleaned up on the
-  next compaction attempt.
+- Before step 7: The original file is untouched. A stale `.compact` file may
+  be left behind and will be cleaned up on the next compaction attempt.
 - During step 7: Depends on filesystem atomicity of rename. On most
   platforms, `File.Move` with `overwrite: true` is atomic.
 
@@ -771,3 +772,63 @@ between normal journal instances and the `Compact` operation.
 | `RecordAlignment`   | `16`                 | All records aligned to 16 bytes |
 | `RecordHeaderSize`  | `16`                 | sizeof(RecordHeader)            |
 | `MinRecordSize`     | `16`                 | Smallest possible record (empty)|
+
+---
+
+## 11. Asynchronous API
+
+All public operations have asynchronous counterparts that return `ValueTask`
+or `ValueTask<T>` and accept a `CancellationToken`.
+
+### 11.1 API Mapping
+
+| Synchronous                             | Asynchronous                                                      |
+|-----------------------------------------|-------------------------------------------------------------------|
+| `Append(ReadOnlySpan<byte>, FlushMode)` | `AppendAsync(ReadOnlySpan<byte>, FlushMode, CancellationToken)`   |
+| `ReadAll()` → `IEnumerable`             | `ReadAllAsync(CancellationToken)` → `IAsyncEnumerable`            |
+| `Flush()`                               | `FlushAsync(CancellationToken)`                                   |
+| `Compact(string, ...)`                  | `CompactAsync(string, ..., CancellationToken)`                    |
+
+**`AppendAsync` accepts `ReadOnlySpan<byte>`** because the span is consumed
+synchronously into a pooled buffer before any asynchronous work begins.
+The public method is a non-async wrapper that prepares the record, then
+delegates to an async core method for the I/O.
+
+### 11.2 Cancellation Semantics
+
+Cancellation is designed to keep journal state consistent at all times:
+
+- **`AppendAsync`**: The token is checked before the operation begins. After
+  `Interlocked.Add` reserves space, cancellation cannot roll back the
+  reservation. If cancellation occurs during `RandomAccess.WriteAsync`, the
+  reserved region becomes a gap (zeros) — identical to the crash window
+  described in §5.3. The read algorithm handles this via corruption recovery
+  and skip markers. The journal remains consistent.
+
+- **`ReadAllAsync`**: The token is checked before each record iteration.
+  Cancelling mid-read does not change the journal's logical contents. Reads
+  are non-destructive, and although recovery may atomically write skip markers
+  that physically modify the file, those markers preserve the same logical
+  representation by encoding gaps the reader would already skip. Each skip
+  marker CAS either succeeds completely or not at all.
+
+- **`FlushAsync`**: The token is checked before the operation. The underlying
+  `FlushToDisk` call is synchronous (no async overload exists in .NET).
+
+- **`CompactAsync`**: Cancellation is checked before temporary state is
+  created and between records during the copy loop. Cancelling leaves the
+  original file intact, and the temporary `.compact` file is deleted before
+  the method exits.
+
+### 11.3 Implementation Notes
+
+- Both `Append` and `AppendAsync` share a common `PrepareAppend` method that
+  validates, reserves space, allocates a pooled buffer, and serializes the
+  record. The sync path then writes synchronously; the async path delegates
+  to an async core method. The `stackalloc` optimization for small payloads
+  is not used — both paths always rent from `ArrayPool`.
+- `ReadAll()` and `ReadAllAsync()` return repeatable sequences: each
+  sequence snapshots the tail on its first enumeration, then each pass gets
+  a fresh internal enumerator and read buffer over that stable snapshot.
+- The internal `FileReadBuffer` provides both `Read` (sync) and `ReadAsync`
+  methods, sharing cache-hit detection and buffer management logic.

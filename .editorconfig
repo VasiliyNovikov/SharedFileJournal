@@ -34,4 +34,7 @@ dotnet_diagnostic.IDE0290.severity = error
 
 [*{Tests,Benchmarks}.cs]
 dotnet_diagnostic.CA1707.severity = none
-dotnet_diagnostic.CA1822.severity = none
+
+[*Tests.cs]
+dotnet_diagnostic.CA1822.severity = warning
+dotnet_code_quality.CA1822.api_surface = private
