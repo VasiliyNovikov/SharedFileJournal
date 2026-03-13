@@ -51,6 +51,7 @@ internal sealed class JournalRecordEnumerator : IEnumerator<JournalRecord>, IAsy
     private readonly bool _allowSkipMarkerWrites;
     private readonly CancellationToken _cancellationToken;
     private long _offset;
+    private bool _disposed;
     private JournalRecord _current;
 
     internal JournalRecordEnumerator(SafeFileHandle fileHandle, int maxPayloadLength, int readAheadSize, long tail, bool allowSkipMarkerWrites, CancellationToken cancellationToken = default)
@@ -69,11 +70,18 @@ internal sealed class JournalRecordEnumerator : IEnumerator<JournalRecord>, IAsy
 
     public void Reset() => throw new NotSupportedException();
 
-    public void Dispose() => _readBuf.Dispose();
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        _readBuf.Dispose();
+    }
 
     public ValueTask DisposeAsync()
     {
-        _readBuf.Dispose();
+        Dispose();
         return ValueTask.CompletedTask;
     }
 
