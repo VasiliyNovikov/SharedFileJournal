@@ -784,7 +784,7 @@ or `ValueTask<T>` and accept a `CancellationToken`.
 
 | Synchronous                             | Asynchronous                                                      |
 |-----------------------------------------|-------------------------------------------------------------------|
-| `Append(ReadOnlySpan<byte>)`            | `AppendAsync(ReadOnlySpan<byte>, FlushMode, CancellationToken)`   |
+| `Append(ReadOnlySpan<byte>, FlushMode)` | `AppendAsync(ReadOnlySpan<byte>, FlushMode, CancellationToken)`   |
 | `ReadAll()` → `IEnumerable`             | `ReadAllAsync(CancellationToken)` → `IAsyncEnumerable`            |
 | `Flush()`                               | `FlushAsync(CancellationToken)`                                   |
 | `Compact(string, ...)`                  | `CompactAsync(string, ..., CancellationToken)`                    |
