@@ -167,24 +167,25 @@ public sealed class SharedJournal : IDisposable
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
         var (buffer, dataLength, offset, alignedLength) = PrepareAppend(payload);
-        return WriteAndCompleteAppendAsync(buffer, dataLength, offset, alignedLength, flushMode, cancellationToken);
-    }
 
-    private async ValueTask<JournalAppendResult> WriteAndCompleteAppendAsync(byte[] buffer, int dataLength, long offset, int alignedLength, FlushMode flushMode, CancellationToken cancellationToken)
-    {
-        try
+        return WriteAndCompleteAsync();
+
+        async ValueTask<JournalAppendResult> WriteAndCompleteAsync()
         {
-            await RandomAccess.WriteAsync(_fileHandle, buffer.AsMemory(0, dataLength), offset, cancellationToken);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-        }
+            try
+            {
+                await RandomAccess.WriteAsync(_fileHandle, buffer.AsMemory(0, dataLength), offset, cancellationToken);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
 
-        if (flushMode == FlushMode.WriteThrough)
-            RandomAccess.FlushToDisk(_fileHandle);
+            if (flushMode == FlushMode.WriteThrough)
+                RandomAccess.FlushToDisk(_fileHandle);
 
-        return new JournalAppendResult(offset, alignedLength);
+            return new JournalAppendResult(offset, alignedLength);
+        }
     }
 
     #endregion
