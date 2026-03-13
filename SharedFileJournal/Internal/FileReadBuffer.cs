@@ -22,22 +22,40 @@ internal sealed class FileReadBuffer(SafeFileHandle fileHandle, int readAheadSiz
     private long _bufferFileOffset = -1;
     private int _bufferBytesRead;
 
-    /// <summary>
-    /// Returns <c>true</c> if the requested range is not in the buffer and a fill is needed.
-    /// Ensures the internal buffer is large enough for <paramref name="length"/> bytes.
-    /// </summary>
-    private bool NeedsFill(long fileOffset, int length)
-    {
-        if (_bufferFileOffset >= 0 && fileOffset >= _bufferFileOffset && fileOffset + length <= _bufferFileOffset + _bufferBytesRead)
-            return false;
+    private bool HasBufferedRange(long fileOffset, int length) =>
+        _bufferFileOffset >= 0 && fileOffset >= _bufferFileOffset && fileOffset + length <= _bufferFileOffset + _bufferBytesRead;
 
-        if (_buffer.Length < length)
+    private static void ReturnTemporaryBuffer(byte[] fillBuffer, byte[] activeBuffer)
+    {
+        if (!ReferenceEquals(fillBuffer, activeBuffer))
+            ArrayPool<byte>.Shared.Return(fillBuffer);
+    }
+
+    private (byte[] Buffer, int ReadLength) PrepareFill(int length)
+    {
+        var readLength = Math.Max(length, readAheadSize);
+        return _buffer.Length >= readLength
+            ? (_buffer, readLength)
+            : (ArrayPool<byte>.Shared.Rent(readLength), readLength);
+    }
+
+    private void PublishFill(byte[] fillBuffer, long fileOffset, int bytesRead)
+    {
+        if (!ReferenceEquals(fillBuffer, _buffer))
         {
-            var newBuffer = ArrayPool<byte>.Shared.Rent(length);
-            ArrayPool<byte>.Shared.Return(_buffer);
-            _buffer = newBuffer;
+            var previousBuffer = _buffer;
+            _buffer = fillBuffer;
+            ArrayPool<byte>.Shared.Return(previousBuffer);
         }
-        return true;
+
+        _bufferFileOffset = fileOffset;
+        _bufferBytesRead = bytesRead;
+    }
+
+    private void ResetCacheState()
+    {
+        _bufferFileOffset = -1;
+        _bufferBytesRead = 0;
     }
 
     private ReadOnlyMemory<byte> GetSlice(long fileOffset, int length)
@@ -55,10 +73,20 @@ internal sealed class FileReadBuffer(SafeFileHandle fileHandle, int readAheadSiz
     /// </summary>
     public ReadOnlyMemory<byte> Read(long fileOffset, int length)
     {
-        if (NeedsFill(fileOffset, length))
+        if (!HasBufferedRange(fileOffset, length))
         {
-            _bufferFileOffset = fileOffset;
-            _bufferBytesRead = RandomAccess.Read(fileHandle, _buffer.AsSpan(0, Math.Max(length, readAheadSize)), fileOffset);
+            var (fillBuffer, readLength) = PrepareFill(length);
+            ResetCacheState();
+            try
+            {
+                var bytesRead = RandomAccess.Read(fileHandle, fillBuffer.AsSpan(0, readLength), fileOffset);
+                PublishFill(fillBuffer, fileOffset, bytesRead);
+            }
+            catch
+            {
+                ReturnTemporaryBuffer(fillBuffer, _buffer);
+                throw;
+            }
         }
         return GetSlice(fileOffset, length);
     }
@@ -70,10 +98,20 @@ internal sealed class FileReadBuffer(SafeFileHandle fileHandle, int readAheadSiz
     /// </summary>
     public async ValueTask<ReadOnlyMemory<byte>> ReadAsync(long fileOffset, int length, CancellationToken cancellationToken)
     {
-        if (NeedsFill(fileOffset, length))
+        if (!HasBufferedRange(fileOffset, length))
         {
-            _bufferFileOffset = fileOffset;
-            _bufferBytesRead = await RandomAccess.ReadAsync(fileHandle, _buffer.AsMemory(0, Math.Max(length, readAheadSize)), fileOffset, cancellationToken);
+            var (fillBuffer, readLength) = PrepareFill(length);
+            ResetCacheState();
+            try
+            {
+                var bytesRead = await RandomAccess.ReadAsync(fileHandle, fillBuffer.AsMemory(0, readLength), fileOffset, cancellationToken);
+                PublishFill(fillBuffer, fileOffset, bytesRead);
+            }
+            catch
+            {
+                ReturnTemporaryBuffer(fillBuffer, _buffer);
+                throw;
+            }
         }
         return GetSlice(fileOffset, length);
     }
