@@ -112,7 +112,6 @@ public sealed class SharedJournal : IDisposable
     /// </summary>
     private (byte[] Buffer, int DataLength, long Offset, int AlignedLength) PrepareAppend(ReadOnlySpan<byte> payload)
     {
-        ObjectDisposedException.ThrowIf(_disposed != 0, this);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(payload.Length, _maxPayloadLength, nameof(payload));
 
         var dataLength = JournalFormat.RecordHeaderSize + payload.Length;
@@ -136,6 +135,7 @@ public sealed class SharedJournal : IDisposable
     /// <returns>Information about the appended record.</returns>
     public JournalAppendResult Append(ReadOnlySpan<byte> payload, FlushMode flushMode = FlushMode.None)
     {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
         var (buffer, dataLength, offset, alignedLength) = PrepareAppend(payload);
         try
         {
@@ -164,6 +164,7 @@ public sealed class SharedJournal : IDisposable
     /// <returns>Information about the appended record.</returns>
     public ValueTask<JournalAppendResult> AppendAsync(ReadOnlySpan<byte> payload, FlushMode flushMode = FlushMode.None, CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
         var (buffer, dataLength, offset, alignedLength) = PrepareAppend(payload);
         return WriteAndCompleteAppendAsync(buffer, dataLength, offset, alignedLength, flushMode, cancellationToken);

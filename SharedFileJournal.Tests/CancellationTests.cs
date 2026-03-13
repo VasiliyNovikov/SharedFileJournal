@@ -44,6 +44,21 @@ public class CancellationTests
     }
 
     [TestMethod]
+    public async Task AppendAsync_AlreadyCancelled_DoesNotReserveSpace()
+    {
+        using var journal = new SharedJournal(JournalPath);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+            () => journal.AppendAsync("cancelled"u8.ToArray(), cancellationToken: cts.Token).AsTask());
+
+        var result = await journal.AppendAsync("written"u8.ToArray());
+
+        Assert.AreEqual((long)JournalFormat.DataStartOffset, result.Offset);
+    }
+
+    [TestMethod]
     public async Task ReadAllAsync_AlreadyCancelled_Throws()
     {
         using var journal = new SharedJournal(JournalPath);

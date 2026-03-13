@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -252,6 +253,18 @@ public class SharedJournalAsyncTests
         journal.Dispose();
 
         await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => journal.AppendAsync("data"u8.ToArray()).AsTask());
+    }
+
+    [TestMethod]
+    public async Task AppendAsync_AfterDispose_WithCancelledToken_ThrowsObjectDisposedException()
+    {
+        var journal = new SharedJournal(JournalPath);
+        journal.Dispose();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(
+            () => journal.AppendAsync("data"u8.ToArray(), cancellationToken: cts.Token).AsTask());
     }
 
     [TestMethod]
