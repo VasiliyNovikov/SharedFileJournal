@@ -806,9 +806,11 @@ Cancellation is designed to keep journal state consistent at all times:
   and skip markers. The journal remains consistent.
 
 - **`ReadAllAsync`**: The token is checked before each record iteration.
-  Cancelling mid-read has no side effects on the journal file (reads are
-  non-destructive, and skip marker writes are atomic CAS operations that
-  either succeed completely or not at all).
+  Cancelling mid-read does not change the journal's logical contents. Reads
+  are non-destructive, and although recovery may atomically write skip markers
+  that physically modify the file, those markers preserve the same logical
+  representation by encoding gaps the reader would already skip. Each skip
+  marker CAS either succeeds completely or not at all.
 
 - **`FlushAsync`**: The token is checked before the operation. The underlying
   `FlushToDisk` call is synchronous (no async overload exists in .NET).
