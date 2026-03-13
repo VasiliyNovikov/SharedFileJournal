@@ -84,6 +84,56 @@ public class CancellationTests
     }
 
     [TestMethod]
+    public async Task ReadAllAsync_WithCancellation_HonorsSequenceToken()
+    {
+        using var journal = new SharedJournal(JournalPath);
+        for (var i = 0; i < 100; i++)
+            journal.Append(Encoding.UTF8.GetBytes($"record-{i}"));
+
+        using var readAllCts = new CancellationTokenSource();
+        using var enumeratorCts = new CancellationTokenSource();
+        var count = 0;
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in journal.ReadAllAsync(readAllCts.Token).WithCancellation(enumeratorCts.Token))
+            {
+                count++;
+                if (count == 10)
+                    readAllCts.Cancel();
+            }
+        });
+
+        Assert.IsTrue(count >= 10 && count < 100,
+            $"Expected partial read (10-99), got {count}");
+    }
+
+    [TestMethod]
+    public async Task ReadAllAsync_WithCancellation_HonorsEnumeratorToken()
+    {
+        using var journal = new SharedJournal(JournalPath);
+        for (var i = 0; i < 100; i++)
+            journal.Append(Encoding.UTF8.GetBytes($"record-{i}"));
+
+        using var readAllCts = new CancellationTokenSource();
+        using var enumeratorCts = new CancellationTokenSource();
+        var count = 0;
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in journal.ReadAllAsync(readAllCts.Token).WithCancellation(enumeratorCts.Token))
+            {
+                count++;
+                if (count == 10)
+                    enumeratorCts.Cancel();
+            }
+        });
+
+        Assert.IsTrue(count >= 10 && count < 100,
+            $"Expected partial read (10-99), got {count}");
+    }
+
+    [TestMethod]
     public async Task ReadAllAsync_CancelledMidRead_JournalStillUsable()
     {
         using var journal = new SharedJournal(JournalPath);

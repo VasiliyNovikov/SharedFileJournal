@@ -32,10 +32,28 @@ internal sealed class JournalRecordSequence(SafeFileHandle fileHandle, int maxPa
     public IEnumerator<JournalRecord> GetEnumerator() => new JournalRecordEnumerator(fileHandle, maxPayloadLength, readAheadSize, GetOrCreateTail(), allowSkipMarkerWrites: allowSkipMarkerWrites);
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-    public IAsyncEnumerator<JournalRecord> GetAsyncEnumerator(CancellationToken cancellationToken = default) =>
-        new JournalRecordEnumerator(fileHandle, maxPayloadLength, readAheadSize, GetOrCreateTail(),
-                                    allowSkipMarkerWrites,
-                                    cancellationToken == CancellationToken.None ? defaultCancellationToken : cancellationToken);
+    public IAsyncEnumerator<JournalRecord> GetAsyncEnumerator(CancellationToken cancellationToken = default)
+    {
+        var (effectiveCancellationToken, linkedCancellationTokenSource) = CombineCancellationTokens(defaultCancellationToken, cancellationToken);
+        return new JournalRecordEnumerator(fileHandle, maxPayloadLength, readAheadSize, GetOrCreateTail(),
+                                           allowSkipMarkerWrites,
+                                           linkedCancellationTokenSource,
+                                           effectiveCancellationToken);
+    }
+
+    private static (CancellationToken Token, CancellationTokenSource? LinkedSource) CombineCancellationTokens(
+        CancellationToken sequenceCancellationToken,
+        CancellationToken enumeratorCancellationToken)
+    {
+        if (!sequenceCancellationToken.CanBeCanceled)
+            return (enumeratorCancellationToken, null);
+
+        if (!enumeratorCancellationToken.CanBeCanceled || enumeratorCancellationToken == sequenceCancellationToken)
+            return (sequenceCancellationToken, null);
+
+        var linkedCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(sequenceCancellationToken, enumeratorCancellationToken);
+        return (linkedCancellationTokenSource.Token, linkedCancellationTokenSource);
+    }
 }
 
 /// <summary>
@@ -50,11 +68,19 @@ internal sealed class JournalRecordEnumerator : IEnumerator<JournalRecord>, IAsy
     private readonly long _tail;
     private readonly bool _allowSkipMarkerWrites;
     private readonly CancellationToken _cancellationToken;
+    private readonly CancellationTokenSource? _linkedCancellationTokenSource;
     private long _offset;
     private bool _disposed;
     private JournalRecord _current;
 
-    internal JournalRecordEnumerator(SafeFileHandle fileHandle, int maxPayloadLength, int readAheadSize, long tail, bool allowSkipMarkerWrites, CancellationToken cancellationToken = default)
+    internal JournalRecordEnumerator(
+        SafeFileHandle fileHandle,
+        int maxPayloadLength,
+        int readAheadSize,
+        long tail,
+        bool allowSkipMarkerWrites,
+        CancellationTokenSource? linkedCancellationTokenSource = null,
+        CancellationToken cancellationToken = default)
     {
         _fileHandle = fileHandle;
         _maxPayloadLength = maxPayloadLength;
@@ -62,6 +88,7 @@ internal sealed class JournalRecordEnumerator : IEnumerator<JournalRecord>, IAsy
         _tail = tail;
         _allowSkipMarkerWrites = allowSkipMarkerWrites;
         _cancellationToken = cancellationToken;
+        _linkedCancellationTokenSource = linkedCancellationTokenSource;
         _offset = JournalFormat.DataStartOffset;
     }
 
@@ -77,6 +104,7 @@ internal sealed class JournalRecordEnumerator : IEnumerator<JournalRecord>, IAsy
 
         _disposed = true;
         _readBuf.Dispose();
+        _linkedCancellationTokenSource?.Dispose();
     }
 
     public ValueTask DisposeAsync()
